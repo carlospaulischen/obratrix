@@ -14,6 +14,8 @@ export type ItemPlanilhaEap = {
   quantidade: number;
   custo_unitario: number;
   centro_custo_id: string | null;
+  inicio_previsto: string | null;
+  fim_previsto: string | null;
 };
 
 export type ErroPlanilha = {
@@ -43,6 +45,8 @@ type Candidato = {
   temQuantidade: boolean;
   temCusto: boolean;
   centroCustoId: string | null;
+  inicioPrevisto: string | null;
+  fimPrevisto: string | null;
   erros: string[];
 };
 
@@ -60,7 +64,33 @@ const colunasObrigatorias = [
   "centro de custo",
 ] as const;
 
-type ColunaPlanilha = typeof colunasObrigatorias[number];
+type ColunaPlanilha =
+  | typeof colunasObrigatorias[number]
+  | "inicio previsto"
+  | "fim previsto";
+
+export function parseDataPtBr(value: unknown): string | undefined {
+  const cell = valorPrimitivo(value);
+  if (cell instanceof Date && !Number.isNaN(cell.getTime())) {
+    return cell.toISOString().slice(0, 10);
+  }
+  if (typeof cell === "number" && Number.isFinite(cell) && cell > 0 && cell < 200000) {
+    const epoch = Date.UTC(1899, 11, 30);
+    return new Date(epoch + Math.round(cell) * 86400000).toISOString().slice(0, 10);
+  }
+  const text = textoCelula(cell).trim();
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (iso.test(text)) return text;
+  const br = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (br) {
+    const [, dia, mes, ano] = br;
+    const date = new Date(Date.UTC(Number(ano), Number(mes) - 1, Number(dia)));
+    if (date.getUTCMonth() === Number(mes) - 1 && date.getUTCDate() === Number(dia)) {
+      return date.toISOString().slice(0, 10);
+    }
+  }
+  return undefined;
+}
 
 export function compareCodigoNatural(a: string, b: string) {
   return collator.compare(a, b);
@@ -132,6 +162,8 @@ export function parsePlanilha(
 
   const getValue = (row: LinhaExcel, column: ColunaPlanilha) =>
     row.valores[indices.get(column)!];
+  const getOptional = (row: LinhaExcel, column: ColunaPlanilha) =>
+    indices.has(column) ? row.valores[indices.get(column)!] : undefined;
   const candidatos: Candidato[] = [];
   const codigosNaPlanilha = new Set<string>();
   const codigosExistentes = new Set(
@@ -157,6 +189,12 @@ export function parsePlanilha(
     const quantityRaw = getValue(row, "quantidade");
     const costRaw = getValue(row, "custo unitario");
     const centerCode = textoCelula(getValue(row, "centro de custo")).trim();
+    const inicioRaw = getOptional(row, "inicio previsto");
+    const fimRaw = getOptional(row, "fim previsto");
+    const inicioProvided = !celulaVazia(inicioRaw);
+    const fimProvided = !celulaVazia(fimRaw);
+    const inicio = inicioProvided ? parseDataPtBr(inicioRaw) : null;
+    const fim = fimProvided ? parseDataPtBr(fimRaw) : null;
     const quantityProvided = !celulaVazia(quantityRaw);
     const costProvided = !celulaVazia(costRaw);
     const quantity = quantityProvided ? parseNumeroPtBr(quantityRaw) : 0;
@@ -189,6 +227,15 @@ export function parsePlanilha(
         rowErrors.push(`Centro de custo desconhecido: ${centerCode}.`);
       }
     }
+    if (inicioProvided && inicio === undefined) {
+      rowErrors.push("Início previsto inválido. Use dd/mm/aaaa ou aaaa-mm-dd.");
+    }
+    if (fimProvided && fim === undefined) {
+      rowErrors.push("Fim previsto inválido. Use dd/mm/aaaa ou aaaa-mm-dd.");
+    }
+    if (inicio && fim && fim < inicio) {
+      rowErrors.push("Fim previsto não pode ser antes do início previsto.");
+    }
 
     for (const mensagem of rowErrors) adicionaErro(row.linha, mensagem);
     if (!code || !/^\d+(?:\.\d+)*$/.test(code) || rowErrors.some((message) =>
@@ -208,6 +255,8 @@ export function parsePlanilha(
       temQuantidade: quantityProvided,
       temCusto: costProvided,
       centroCustoId: centerId,
+      inicioPrevisto: inicio ?? null,
+      fimPrevisto: fim ?? null,
       erros: rowErrors,
     });
   }
@@ -263,6 +312,8 @@ export function parsePlanilha(
       quantidade: candidate.quantidade,
       custo_unitario: candidate.custoUnitario,
       centro_custo_id: candidate.centroCustoId,
+      inicio_previsto: candidate.inicioPrevisto,
+      fim_previsto: candidate.fimPrevisto,
     });
   }
 

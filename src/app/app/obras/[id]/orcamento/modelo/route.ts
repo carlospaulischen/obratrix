@@ -20,11 +20,11 @@ export async function GET(
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Obratrix";
   const sheet = workbook.addWorksheet("Orçamento EAP");
-  sheet.addRow(["Código", "Descrição", "Unidade", "Quantidade", "Custo unitário", "Centro de custo"]);
+  sheet.addRow(["Código", "Descrição", "Unidade", "Quantidade", "Custo unitário", "Centro de custo", "Início previsto", "Fim previsto"]);
   sheet.addRows([
-    ["1", "Serviços preliminares", "", "", "", ""],
-    ["1.1", "Locação da obra", "m²", 380, 18, "FND"],
-    ["1.2", "Escavação de valas", "m³", 145, 28, "FND"],
+    ["1", "Serviços preliminares", "", "", "", "", "", ""],
+    ["1.1", "Locação da obra", "m²", 380, 18, "FND", "22/07/2026", "17/08/2026"],
+    ["1.2", "Escavação de valas", "m³", 145, 28, "FND", "26/07/2026", "21/08/2026"],
   ]);
   sheet.getRow(1).font = { bold: true };
   return new Response(new Uint8Array(await workbook.xlsx.writeBuffer()), {

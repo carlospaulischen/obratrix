@@ -51,6 +51,38 @@ describe("parsePlanilha", () => {
     expect(result.itens[0]?.quantidade).toBe(12.5);
   });
 
+  it("lê datas do cronograma nas colunas opcionais e valida o intervalo", () => {
+    const cabecalhoComDatas = [...cabecalho, "Início previsto", "Fim previsto"];
+    const result = parsePlanilha([
+      linha(1, ...cabecalhoComDatas),
+      linha(2, "1", "Fundação", "", "", "", "", "", ""),
+      linha(3, "1.1", "Concreto", "m³", 12, 850, "", "22/07/2026", "17/08/2026"),
+      linha(4, "1.2", "Blocos", "m²", 20, 90, "", "2026-08-24", ""),
+    ], { modo: "substituir" });
+
+    expect(result.erros).toEqual([]);
+    expect(result.itens.find((item) => item.codigo === "1.1")).toMatchObject({
+      inicio_previsto: "2026-07-22",
+      fim_previsto: "2026-08-17",
+    });
+    expect(result.itens.find((item) => item.codigo === "1.2")).toMatchObject({
+      inicio_previsto: "2026-08-24",
+      fim_previsto: null,
+    });
+
+    const comErro = parsePlanilha([
+      linha(1, ...cabecalhoComDatas),
+      linha(2, "1", "Fundação", "", "", "", "", "", ""),
+      linha(3, "1.1", "Concreto", "m³", 12, 850, "", "20/08/2026", "10/08/2026"),
+      linha(4, "1.2", "Blocos", "m²", 20, 90, "", "data errada", ""),
+    ], { modo: "substituir" });
+    expect(comErro.itens.map((item) => item.codigo)).toEqual(["1"]);
+    expect(comErro.erros.map((erro) => erro.mensagem)).toEqual([
+      "Fim previsto não pode ser antes do início previsto.",
+      "Início previsto inválido. Use dd/mm/aaaa ou aaaa-mm-dd.",
+    ]);
+  });
+
   it("retorna erro quando o pai não está na planilha ou na obra", () => {
     const result = parsePlanilha([
       linha(1, ...cabecalho),
