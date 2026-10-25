@@ -1,0 +1,24 @@
+{
+  "app": {
+    "name": "Obratrix",
+    "tagline": "Gestão de obras, sem perder o controle",
+    "home": "Painel",
+    "works": "Obras",
+    "budget": "Orçamento / EAP",
+    "rdo": "RDO",
+    "costs": "Custos",
+    "members": "Membros",
+    "comingSoon": "Em breve",
+    "today": "Hoje",
+    "register": "Registrar",
+    "photo": "Foto",
+    "issue": "Problema"
+  },
+  "auth": {
+    "login": "Entrar",
+    "signup": "Criar conta",
+    "email": "E-mail",
+    "password": "Senha",
+    "name": "Nome completo"
+  }
+}
