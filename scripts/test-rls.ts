@@ -691,6 +691,56 @@ try {
   if (directorDatesUpdate.count !== 1) throw new Error("Diretor não conseguiu editar datas do cronograma.");
   console.log("PASS: diretor edita datas do cronograma.");
 
+  const foremanMedicoes = await assertAsUser(foremanId, async (tx) => (
+    tx<{ id: string }[]>`
+      select id
+      from public.obx_medicoes
+      where obra_id = ${workId}
+      limit 1
+    `
+  ));
+  if (!foremanMedicoes.length) throw new Error("Encarregado membro não leu medições.");
+  console.log("PASS: encarregado membro lê medições.");
+
+  let foremanMedicaoBlocked = false;
+  try {
+    await assertAsUser(foremanId, async (tx) => (
+      tx`
+        select public.obx_fn_emitir_medicao(
+          ${workId},
+          current_date - 30,
+          current_date - 1
+        )
+      `
+    ));
+  } catch (error) {
+    foremanMedicaoBlocked = (error as { code?: string }).code === "42501";
+  }
+  if (!foremanMedicaoBlocked) throw new Error("Encarregado emitiu medição.");
+  console.log("PASS: encarregado não emite medição (RPC).");
+
+  const engineerMedicao = await assertAsUser(engineerId, async (tx) => (
+    tx<{ obx_fn_emitir_medicao: string }[]>`
+      select public.obx_fn_emitir_medicao(
+        ${workId},
+        current_date - 3650,
+        current_date - 3620
+      ) as obx_fn_emitir_medicao
+    `
+  ));
+  const engineerMedicaoId = engineerMedicao[0]?.obx_fn_emitir_medicao;
+  if (!engineerMedicaoId) throw new Error("Engenheiro membro não emitiu medição.");
+  console.log("PASS: engenheiro membro emite medição pela RPC.");
+  await sql`delete from public.obx_medicoes where id = ${engineerMedicaoId}`;
+
+  const foreignMedicoes = await assertAsUser(temporaryUserId, async (tx) => (
+    tx<{ id: string }[]>`
+      select id from public.obx_medicoes where obra_id = ${workId}
+    `
+  ));
+  if (foreignMedicoes.length !== 0) throw new Error("Usuário de outra empresa leu medições.");
+  console.log("PASS: medições invisíveis para outra empresa.");
+
   await sql`delete from public.obx_planos_semanais where id = ${engineerPlanoId}`;
 
   const profile = await sql<{ id: string; email: string }[]>`

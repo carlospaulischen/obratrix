@@ -897,3 +897,38 @@ export async function parseRdoVozAction(input: unknown): Promise<{ error?: strin
     },
   };
 }
+
+const medicaoSchema = z.object({
+  obraId: z.string().uuid(),
+  periodoInicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Informe o início do período."),
+  periodoFim: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Informe o fim do período."),
+});
+
+export async function emitirMedicaoAction(input: unknown): Promise<ActionState & { medicaoId?: string }> {
+  const parsed = medicaoSchema.safeParse(input);
+  if (!parsed.success) return { error: "Informe um período válido." };
+  if (parsed.data.periodoFim < parsed.data.periodoInicio) {
+    return { error: "O fim do período não pode ser antes do início." };
+  }
+
+  const { supabase, company } = await getCompanyContext();
+  const { data: work } = await supabase
+    .from("obx_obras")
+    .select("id")
+    .eq("id", parsed.data.obraId)
+    .eq("empresa_id", company.id)
+    .maybeSingle();
+  if (!work) return { error: "Obra não encontrada na empresa ativa." };
+
+  const { data: medicaoId, error } = await supabase.rpc("obx_fn_emitir_medicao", {
+    p_obra_id: work.id,
+    p_periodo_inicio: parsed.data.periodoInicio,
+    p_periodo_fim: parsed.data.periodoFim,
+  });
+  if (error || !medicaoId) {
+    return { error: error?.message ?? "Não foi possível emitir a medição." };
+  }
+
+  revalidatePath(`/app/obras/${parsed.data.obraId}/medicao`);
+  return { success: "Medição emitida.", medicaoId };
+}

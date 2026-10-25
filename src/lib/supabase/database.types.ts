@@ -223,6 +223,64 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"obx_medicao_itens": {
+                  Row: {
+                    "created_at": string,"eap_item_id": string,"id": string,"medicao_id": string,"quantidade": number,"valor": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"eap_item_id": string,"id"?: string,"medicao_id": string,"quantidade": number,"valor": number
+                  }
+                  Update: {
+                    "created_at"?: string,"eap_item_id"?: string,"id"?: string,"medicao_id"?: string,"quantidade"?: number,"valor"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "obx_medicao_itens_eap_item_id_fkey"
+      columns: ["eap_item_id"]
+isOneToOne: false
+      referencedRelation: "obx_eap_itens"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "obx_medicao_itens_medicao_id_fkey"
+      columns: ["medicao_id"]
+isOneToOne: false
+      referencedRelation: "obx_medicoes"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"obx_medicoes": {
+                  Row: {
+                    "created_at": string,"criada_por": string | null,"id": string,"numero": number,"obra_id": string,"periodo_fim": string,"periodo_inicio": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"criada_por"?: string | null,"id"?: string,"numero": number,"obra_id": string,"periodo_fim": string,"periodo_inicio": string
+                  }
+                  Update: {
+                    "created_at"?: string,"criada_por"?: string | null,"id"?: string,"numero"?: number,"obra_id"?: string,"periodo_fim"?: string,"periodo_inicio"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "obx_medicoes_criada_por_fkey"
+      columns: ["criada_por"]
+isOneToOne: false
+      referencedRelation: "obx_usuarios"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "obx_medicoes_obra_id_fkey"
+      columns: ["obra_id"]
+isOneToOne: false
+      referencedRelation: "obx_obras"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "obx_medicoes_obra_id_fkey"
+      columns: ["obra_id"]
+isOneToOne: false
+      referencedRelation: "obx_vw_obra_resumo"
+      referencedColumns: ["obra_id"]
+    }
+                  ]
                 },"obx_obra_membros": {
                   Row: {
                     "created_at": string,"obra_id": string,"usuario_id": string
@@ -513,6 +571,9 @@ isOneToOne: false
           Functions: {
             "obx_fn_criar_empresa":
 { Args: { "p_cnpj"?: string,"p_nome": string }; Returns: string
+                           },
+"obx_fn_emitir_medicao":
+{ Args: { "p_obra_id": string,"p_periodo_fim": string,"p_periodo_inicio": string }; Returns: string
                            },
 "obx_fn_importar_custos":
 { Args: { "p_itens": Json,"p_obra_id": string }; Returns: Json

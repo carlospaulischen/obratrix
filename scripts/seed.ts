@@ -505,6 +505,41 @@ async function seedRdos(
   requireSuccess(cleanupProduction.error);
   const productionResult = await supabase.from("obx_rdo_producao").upsert(productionRows);
   requireSuccess(productionResult.error);
+
+  // Medição do primeiro mês de produção confirmada (snapshot do período)
+  const dataPorRdoId = new Map([...rdoIds].map(([data, rdoId]) => [rdoId, data]));
+  const primeiroMesFim = dateAtDay(dayNumber(dataInicio) + 30);
+  const itensMedicao = new Map<string, number>();
+  for (const row of productionRows) {
+    const data = dataPorRdoId.get(row.rdo_id ?? "");
+    if (!data || data < dataInicio || data > primeiroMesFim) continue;
+    itensMedicao.set(row.eap_item_id, (itensMedicao.get(row.eap_item_id) ?? 0) + row.quantidade);
+  }
+  if (itensMedicao.size) {
+    await supabase.from("obx_medicoes").delete().eq("obra_id", obraId);
+    const { data: medicao, error: medicaoError } = await supabase
+      .from("obx_medicoes")
+      .insert({
+        obra_id: obraId,
+        numero: 1,
+        periodo_inicio: dataInicio,
+        periodo_fim: primeiroMesFim,
+        criada_por: directorId,
+      })
+      .select("id")
+      .single();
+    requireSuccess(medicaoError);
+    const custoPorServico = new Map(services.map((service) => [service.id, service.custo_unitario]));
+    const { error: itensError } = await supabase.from("obx_medicao_itens").insert(
+      [...itensMedicao].map(([eapItemId, quantidade]) => ({
+        medicao_id: medicao!.id,
+        eap_item_id: eapItemId,
+        quantidade,
+        valor: Math.round(quantidade * (custoPorServico.get(eapItemId) ?? 0) * 100) / 100,
+      })),
+    );
+    requireSuccess(itensError);
+  }
   const executedByService = new Map<string, number>();
   for (const row of productionRows) {
     executedByService.set(row.eap_item_id, (executedByService.get(row.eap_item_id) ?? 0) + row.quantidade);

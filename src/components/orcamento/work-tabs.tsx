@@ -6,7 +6,7 @@ export function WorkTabs({
   showCosts = false,
 }: {
   workId: string;
-  active: "resumo" | "orcamento" | "cronograma" | "semanal" | "rdo" | "custos";
+  active: "resumo" | "orcamento" | "cronograma" | "semanal" | "rdo" | "medicao" | "materiais" | "custos";
   showCosts?: boolean;
 }) {
   const tabs = [
@@ -15,6 +15,8 @@ export function WorkTabs({
     { href: `/app/obras/${workId}/cronograma`, label: "Cronograma", id: "cronograma" },
     { href: `/app/obras/${workId}/semanal`, label: "Semanal", id: "semanal" },
     { href: `/app/obras/${workId}/rdo`, label: "RDO", id: "rdo" },
+    { href: `/app/obras/${workId}/medicao`, label: "Medição", id: "medicao" },
+    { href: `/app/obras/${workId}/materiais`, label: "Materiais", id: "materiais" },
     ...(showCosts ? [{ href: `/app/obras/${workId}/custos`, label: "Custos", id: "custos" as const }] : []),
   ];
 
