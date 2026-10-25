@@ -739,3 +739,161 @@ export async function askObraAction(input: unknown): Promise<{ error?: string; r
   if (!resposta) return { error: "A IA ainda não está configurada (defina AI_API_KEY) ou não respondeu. Tente novamente." };
   return { resposta };
 }
+
+const vozSchema = z.object({
+  obraId: z.string().uuid(),
+  texto: z.string().trim().min(5, "Diga algo sobre o dia.").max(4000),
+});
+
+export type RdoVozDados = {
+  clima_manha: string;
+  clima_tarde: string;
+  mao_obra: { funcao: string; quantidade: number; horas: number }[];
+  producao: { eap_item_id: string; servico_busca: string; quantidade: number; observacao: string }[];
+  producao_sem_match: string[];
+  equipamentos: { equipamento: string; horas_trabalhadas: number; horas_paradas: number; motivo_parada: string }[];
+  materiais: { material: string; quantidade: number; unidade: string }[];
+  ocorrencias: { tipo: string; descricao: string; hora_inicio: string; hora_fim: string }[];
+  observacoes: string;
+};
+
+const normalizar = (texto: string) =>
+  texto.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+
+export async function parseRdoVozAction(input: unknown): Promise<{ error?: string; dados?: RdoVozDados }> {
+  const parsed = vozSchema.safeParse(input);
+  if (!parsed.success) return { error: "Não entendi o relato — tente falar novamente." };
+
+  const { supabase } = await getCompanyContext();
+  const { data: canRecord } = await supabase.rpc("obx_fn_pode_registrar_campo", {
+    p_obra_id: parsed.data.obraId,
+  });
+  if (!canRecord) return { error: "Você não tem permissão para registrar RDO nesta obra." };
+
+  const { data: services } = await supabase
+    .from("obx_eap_itens")
+    .select("id,codigo,descricao,unidade")
+    .eq("obra_id", parsed.data.obraId)
+    .eq("tipo", "servico");
+
+  const catalogo = (services ?? []).map((service) => ({
+    codigo: service.codigo,
+    descricao: service.descricao,
+    unidade: service.unidade,
+  }));
+
+  const { chatCompletion } = await import("@/lib/ai/chat");
+  const resposta = await chatCompletion(
+    `Você converte um relato falado de obra em JSON estruturado para o diário de obra (RDO) brasileiro. ` +
+    `Responda SOMENTE com JSON válido, sem markdown, neste formato exato: ` +
+    `{"clima_manha":"","clima_tarde":"","mao_obra":[{"funcao":"","quantidade":0,"horas":0}],` +
+    `"producao":[{"servico":"","quantidade":0,"observacao":""}],` +
+    `"equipamentos":[{"equipamento":"","horas_trabalhadas":0,"horas_paradas":0,"motivo_parada":""}],` +
+    `"materiais":[{"material":"","quantidade":0,"unidade":""}],` +
+    `"ocorrencias":[{"tipo":"","descricao":"","hora_inicio":"","hora_fim":""}],"observacoes":""}. ` +
+    `Regras: clima em bom|nublado|chuva_fraca|chuva_forte|impraticavel (ou "" se não citado); ` +
+    `em "servico", retorne o CÓDIGO da EAP quando identificar o serviço no catálogo; ` +
+    `se não tiver certeza de qual serviço é, retorne a descrição como foi falada; ` +
+    `quantidade em número; ` +
+    `horas_trabalhadas/horas_paradas e mao_obra.horas em horas (número); hora_inicio/hora_fim em HH:MM ou ""; ` +
+    `omita campos que o relato não mencionar. Não invente dados.`,
+    [{ role: "user", content: `Serviços da EAP desta obra (JSON): ${JSON.stringify(catalogo)}\n\nRelato: ${parsed.data.texto}` }],
+    4000,
+  );
+  if (!resposta) return { error: "A IA não respondeu. Verifique AI_API_KEY ou tente novamente." };
+
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(resposta.replace(/^```(?:json)?|```$/g, "").trim()) as Record<string, unknown>;
+  } catch {
+    return { error: "A IA retornou um formato inválido — tente novamente." };
+  }
+  const lista = (valor: unknown) => (Array.isArray(valor) ? valor : []);
+  const numero = (valor: unknown) => {
+    const n = Number(valor);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+  const texto = (valor: unknown) => (typeof valor === "string" ? valor.trim() : "");
+  const clima = (valor: unknown) => {
+    const v = normalizar(texto(valor)).replace(/[^a-z_]/g, "");
+    return ["bom", "nublado", "chuva_fraca", "chuva_forte", "impraticavel"].includes(v) ? v : "";
+  };
+
+  const porCodigo = new Map((services ?? []).map((s) => [normalizar(s.codigo), s]));
+  const porDescricao = new Map((services ?? []).map((s) => [normalizar(s.descricao), s]));
+  const resolverServico = (termo: string) => {
+    const alvo = normalizar(termo);
+    if (!alvo) return null;
+    const direto = porCodigo.get(alvo) ?? porDescricao.get(alvo);
+    if (direto) return direto;
+    const porPrefixo = (services ?? []).find((s) => {
+      const codigo = normalizar(s.codigo);
+      const descricao = normalizar(s.descricao);
+      return alvo.startsWith(codigo) || descricao.includes(alvo) || alvo.includes(descricao);
+    });
+    if (porPrefixo) return porPrefixo;
+    // melhor sobreposição de palavras (ignora palavras curtas); exige 2+ palavras em comum
+    const palavras = new Set(alvo.split(/\s+/).filter((p) => p.length > 3));
+    if (!palavras.size) return null;
+    let melhor: NonNullable<typeof services>[number] | null = null;
+    let melhorScore = 0;
+    for (const s of services ?? []) {
+      const score = normalizar(`${s.codigo} ${s.descricao}`)
+        .split(/\s+/)
+        .filter((p) => palavras.has(p)).length;
+      if (score > melhorScore) {
+        melhorScore = score;
+        melhor = s;
+      }
+    }
+    return melhorScore >= 2 ? melhor : null;
+  };
+
+  const producao: RdoVozDados["producao"] = [];
+  const producaoSemMatch: string[] = [];
+  for (const linha of lista(raw.producao) as Record<string, unknown>[]) {
+    const servico = resolverServico(texto(linha.servico));
+    if (!servico) {
+      if (texto(linha.servico)) producaoSemMatch.push(texto(linha.servico));
+      continue;
+    }
+    producao.push({
+      eap_item_id: servico.id,
+      servico_busca: `${servico.codigo} — ${servico.descricao}`,
+      quantidade: numero(linha.quantidade),
+      observacao: texto(linha.observacao),
+    });
+  }
+
+  return {
+    dados: {
+      clima_manha: clima(raw.clima_manha),
+      clima_tarde: clima(raw.clima_tarde),
+      mao_obra: (lista(raw.mao_obra) as Record<string, unknown>[])
+        .map((l) => ({ funcao: texto(l.funcao), quantidade: Math.round(numero(l.quantidade)), horas: numero(l.horas) }))
+        .filter((l) => l.funcao),
+      producao,
+      producao_sem_match: producaoSemMatch,
+      equipamentos: (lista(raw.equipamentos) as Record<string, unknown>[])
+        .map((l) => ({
+          equipamento: texto(l.equipamento),
+          horas_trabalhadas: numero(l.horas_trabalhadas),
+          horas_paradas: numero(l.horas_paradas),
+          motivo_parada: texto(l.motivo_parada),
+        }))
+        .filter((l) => l.equipamento),
+      materiais: (lista(raw.materiais) as Record<string, unknown>[])
+        .map((l) => ({ material: texto(l.material), quantidade: numero(l.quantidade), unidade: texto(l.unidade) }))
+        .filter((l) => l.material),
+      ocorrencias: (lista(raw.ocorrencias) as Record<string, unknown>[])
+        .map((l) => ({
+          tipo: texto(l.tipo),
+          descricao: texto(l.descricao),
+          hora_inicio: texto(l.hora_inicio),
+          hora_fim: texto(l.hora_fim),
+        }))
+        .filter((l) => l.tipo || l.descricao),
+      observacoes: texto(raw.observacoes),
+    },
+  };
+}

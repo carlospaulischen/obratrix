@@ -13,6 +13,7 @@ export function iaConfigurada() {
 export async function chatCompletion(
   systemPrompt: string,
   messages: MensagemChat[],
+  maxTokens = 900,
 ): Promise<string | null> {
   const apiKey = process.env.AI_API_KEY;
   if (!apiKey) return null;
@@ -32,7 +33,9 @@ export async function chatCompletion(
       body: JSON.stringify({
         model,
         temperature: 0.2,
-        max_tokens: 900,
+        max_tokens: maxTokens,
+        // OpenRouter: modelos de raciocínio devolvem só a resposta final
+        reasoning: { exclude: true },
         messages: [{ role: "system", content: systemPrompt }, ...messages],
       }),
     });

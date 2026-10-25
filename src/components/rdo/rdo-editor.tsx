@@ -11,7 +11,9 @@ import {
   deleteRdoPhotoAction,
   reopenRdoAction,
   saveRdoAction,
+  type RdoVozDados,
 } from "@/app/actions";
+import { RdoVozPanel } from "@/components/rdo/rdo-voz-panel";
 import { createClient } from "@/lib/supabase/client";
 import { formatNumber } from "@/lib/format";
 import { calcularSaldo } from "@/lib/rdo/saldo";
@@ -235,6 +237,22 @@ export function RdoEditor({
     form.register(name as never, { setValueAs: (value: string) => value === "" ? 0 : Number(value) });
   const observationsError = fieldError("observacoes");
 
+  const aplicarVoz = (dados: RdoVozDados) => {
+    const marcadores = { shouldDirty: true, shouldValidate: true } as const;
+    if (dados.clima_manha) form.setValue("clima_manha", dados.clima_manha as never, marcadores);
+    if (dados.clima_tarde) form.setValue("clima_tarde", dados.clima_tarde as never, marcadores);
+    if (dados.mao_obra.length) labor.replace(dados.mao_obra);
+    if (dados.producao.length) production.replace(dados.producao);
+    if (dados.equipamentos.length) equipment.replace(dados.equipamentos);
+    if (dados.materiais.length) materials.replace(dados.materiais);
+    if (dados.ocorrencias.length) occurrences.replace(dados.ocorrencias);
+    if (dados.observacoes) {
+      const atual = form.getValues("observacoes") ?? "";
+      form.setValue("observacoes", atual ? `${atual}\n${dados.observacoes}` : dados.observacoes, marcadores);
+    }
+    setMessage("Relato estruturado pela IA — revise e salve.");
+  };
+
   return (
     <div className="space-y-5">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -262,6 +280,7 @@ export function RdoEditor({
         className="space-y-4"
       >
         <fieldset disabled={!canEdit || pending || photoBusy} className="space-y-4 disabled:opacity-90">
+          {canEdit && !confirmed && <RdoVozPanel workId={workId} onAplicar={aplicarVoz} />}
           <details open className={sectionClass}>
             <summary className="cursor-pointer text-base font-bold text-slate-900">Clima</summary>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
