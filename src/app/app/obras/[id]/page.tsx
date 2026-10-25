@@ -8,9 +8,11 @@ import {
   UsersRound,
 } from "lucide-react";
 import { WorkMemberForm } from "@/components/membership-forms";
+import { WorkTabs } from "@/components/orcamento/work-tabs";
 import { Button } from "@/components/ui/button";
 import { getCompanyContext } from "@/lib/company";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/format";
+import { dataHoje, inicioDaSemana } from "@/lib/rdo/data";
 
 const statusLabels: Record<string, string> = {
   planejamento: "Planejamento",
@@ -30,10 +32,44 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
     .maybeSingle();
   if (!work) notFound();
 
-  const [{ data: summary }, { data: workMemberRows }] = await Promise.all([
+  const [{ data: summary }, { data: workMemberRows }, { data: recentRdos }, { data: weekRdos }] = await Promise.all([
     supabase.from("obx_vw_obra_resumo").select("orcado_total,custo_realizado,valor_executado,avanco_fisico_pct,avanco_planejado_pct").eq("obra_id", id).maybeSingle(),
     supabase.from("obx_obra_membros").select("usuario_id").eq("obra_id", id),
+    supabase.from("obx_rdos").select("id,data,status").eq("obra_id", id).order("data", { ascending: false }).limit(5),
+    supabase.from("obx_rdos").select("id").eq("obra_id", id).gte("data", inicioDaSemana(dataHoje())).lte("data", dataHoje()),
   ]);
+  const recentRdoIds = (recentRdos ?? []).map((rdo) => rdo.id);
+  const weekRdoIds = (weekRdos ?? []).map((rdo) => rdo.id);
+  const [{ data: recentLabor }, { data: recentOccurrences }, { data: weeklyProduction }] = await Promise.all([
+    recentRdoIds.length
+      ? supabase.from("obx_rdo_mao_obra").select("rdo_id,quantidade").in("rdo_id", recentRdoIds)
+      : Promise.resolve({ data: [] }),
+    recentRdoIds.length
+      ? supabase.from("obx_rdo_ocorrencias").select("rdo_id").in("rdo_id", recentRdoIds)
+      : Promise.resolve({ data: [] }),
+    weekRdoIds.length
+      ? supabase.from("obx_rdo_producao").select("eap_item_id,quantidade").in("rdo_id", weekRdoIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const peopleByRdo = new Map<string, number>();
+  for (const line of recentLabor ?? []) {
+    peopleByRdo.set(line.rdo_id, (peopleByRdo.get(line.rdo_id) ?? 0) + Number(line.quantidade));
+  }
+  const occurrencesByRdo = new Map<string, number>();
+  for (const line of recentOccurrences ?? []) {
+    occurrencesByRdo.set(line.rdo_id, (occurrencesByRdo.get(line.rdo_id) ?? 0) + 1);
+  }
+  const quantitiesByService = new Map<string, number>();
+  for (const line of weeklyProduction ?? []) {
+    quantitiesByService.set(line.eap_item_id, (quantitiesByService.get(line.eap_item_id) ?? 0) + Number(line.quantidade));
+  }
+  const weeklyServiceIds = Array.from(quantitiesByService.keys());
+  const { data: weeklyServices } = weeklyServiceIds.length
+    ? await supabase.from("obx_eap_itens").select("id,codigo,descricao,unidade").in("id", weeklyServiceIds)
+    : { data: [] };
+  const weeklySummary = (weeklyServices ?? [])
+    .map((service) => ({ ...service, quantidade: quantitiesByService.get(service.id) ?? 0 }))
+    .sort((a, b) => a.codigo.localeCompare(b.codigo, "pt-BR", { numeric: true }));
   const memberIds = (workMemberRows ?? []).map((entry) => entry.usuario_id);
   const [{ data: workProfiles }, { data: companyMemberships }] = await Promise.all([
     memberIds.length
@@ -59,6 +95,8 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
       <Link href="/app/obras" className="inline-flex items-center gap-2 text-xs font-semibold text-slate-500 hover:text-emerald-800">
         <ArrowLeft size={15} /> Todas as obras
       </Link>
+
+      <WorkTabs workId={work.id} active="resumo" />
 
       <section className="rounded-2xl border border-slate-200/70 bg-white p-5 sm:p-7">
         <div className="flex flex-col justify-between gap-5 md:flex-row md:items-start">
@@ -89,6 +127,49 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
         <SummaryCard label="Avanço físico" value={`${formatNumber(progress, company.locale, { maximumFractionDigits: 1 })}%`} detail="conforme produção registrada" percent={progress} accent="emerald" />
         <SummaryCard label="Orçamento EAP" value={formatCurrency(summary?.orcado_total, company.locale, company.moeda)} detail="serviços planejados" />
         <SummaryCard label="Custos realizados" value={formatCurrency(summary?.custo_realizado, company.locale, company.moeda)} detail="lançamentos da obra" accent="amber" />
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <article className="rounded-2xl border border-slate-200/70 bg-white p-5 sm:p-6">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-bold text-slate-900">Últimos RDOs</h2>
+              <p className="mt-1 text-xs text-slate-500">Registros mais recentes da obra.</p>
+            </div>
+            <Link href={`/app/obras/${work.id}/rdo`} className="text-xs font-semibold text-emerald-800 hover:underline">Ver todos</Link>
+          </div>
+          <div className="mt-4 divide-y divide-slate-100">
+            {(recentRdos ?? []).map((rdo) => (
+              <Link key={rdo.id} href={`/app/obras/${work.id}/rdo/${rdo.data}`} className="flex items-center justify-between gap-3 py-3">
+                <span>
+                  <span className="block text-sm font-semibold text-slate-800">{formatDate(rdo.data, company.locale)}</span>
+                  <span className="mt-1 block text-xs text-slate-500">{peopleByRdo.get(rdo.id) ?? 0} pessoas · {occurrencesByRdo.get(rdo.id) ?? 0} ocorrências</span>
+                </span>
+                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${rdo.status === "confirmado" ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}>
+                  {rdo.status === "confirmado" ? "Confirmado" : "Rascunho"}
+                </span>
+              </Link>
+            ))}
+            {!recentRdos?.length && <p className="py-5 text-sm text-slate-500">Ainda não há RDOs registrados.</p>}
+          </div>
+        </article>
+
+        <article className="rounded-2xl border border-slate-200/70 bg-white p-5 sm:p-6">
+          <h2 className="font-bold text-slate-900">Produção da semana</h2>
+          <p className="mt-1 text-xs text-slate-500">Quantidades lançadas desde {formatDate(inicioDaSemana(dataHoje()), company.locale)}.</p>
+          <div className="mt-4 divide-y divide-slate-100">
+            {weeklySummary.map((service) => (
+              <div key={service.id} className="flex items-center justify-between gap-3 py-3">
+                <span className="min-w-0">
+                  <span className="block text-xs font-bold text-slate-500">{service.codigo}</span>
+                  <span className="mt-0.5 block truncate text-sm font-semibold text-slate-800">{service.descricao}</span>
+                </span>
+                <span className="shrink-0 text-sm font-bold text-slate-900">{formatNumber(service.quantidade, company.locale)} {service.unidade ?? ""}</span>
+              </div>
+            ))}
+            {!weeklySummary.length && <p className="py-5 text-sm text-slate-500">Sem produção lançada nesta semana.</p>}
+          </div>
+        </article>
       </section>
 
       <section className="rounded-2xl border border-slate-200/70 bg-white">

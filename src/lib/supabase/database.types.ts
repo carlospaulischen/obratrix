@@ -456,6 +456,9 @@ isOneToOne: false
             "obx_fn_criar_empresa":
 { Args: { "p_cnpj"?: string,"p_nome": string }; Returns: string
                            },
+"obx_fn_importar_eap":
+{ Args: { "p_itens": Json,"p_modo": string,"p_obra_id": string }; Returns: Json
+                           },
 "obx_fn_perfil_na_empresa":
 { Args: { "p_empresa_id": string }; Returns: Database["public"]['Enums']["obx_perfil"]
                            },
@@ -473,6 +476,9 @@ isOneToOne: false
                            },
 "obx_fn_pode_ver_obra":
 { Args: { "p_obra_id": string }; Returns: boolean
+                           },
+"obx_fn_salvar_rdo":
+{ Args: { "p_data": string,"p_obra_id": string,"p_payload": Json }; Returns: string
                            },
 "obx_fn_usuario_na_empresa":
 { Args: { "p_empresa_id": string }; Returns: boolean

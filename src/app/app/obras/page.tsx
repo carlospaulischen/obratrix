@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, BriefcaseBusiness, Plus, Search } from "lucide-react";
+import { ArrowRight, BarChart3, BriefcaseBusiness, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getCompanyContext } from "@/lib/company";
 import { formatCurrency, formatDate } from "@/lib/format";
@@ -54,7 +54,8 @@ export default async function WorksPage() {
       {works?.length ? (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {works.map((work) => (
-            <Link key={work.id} href={`/app/obras/${work.id}`} className="group rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_2px_10px_rgba(20,44,32,0.02)] transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md sm:p-6">
+            <article key={work.id} className="group rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_2px_10px_rgba(20,44,32,0.02)] transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md sm:p-6">
+              <Link href={`/app/obras/${work.id}`} className="block">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-start gap-3.5">
                   <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-800">
@@ -84,7 +85,13 @@ export default async function WorksPage() {
                   <span className="flex items-center gap-1 text-xs font-semibold text-emerald-800 group-hover:gap-2">Ver detalhes <ArrowRight size={14} /></span>
                 </div>
               </div>
-            </Link>
+              </Link>
+              <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">
+                <Link href={`/app/obras/${work.id}/orcamento`} className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-800 hover:underline">
+                  <BarChart3 size={14} /> Orçamento/EAP
+                </Link>
+              </div>
+            </article>
           ))}
         </div>
       ) : (

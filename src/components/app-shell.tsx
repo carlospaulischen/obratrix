@@ -23,8 +23,6 @@ const navigation = [
 ];
 
 const futureItems = [
-  { label: "Orçamento / EAP", icon: BarChart3 },
-  { label: "RDO", icon: ClipboardList },
   { label: "Custos", icon: Wallet },
 ];
 
@@ -62,6 +60,14 @@ export function AppShell({
         </nav>
         <div className="mb-2 mt-8 px-3 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Gestão da obra</div>
         <nav className="space-y-1">
+          <Link href="/app/obras" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-emerald-800">
+            <BarChart3 size={18} />
+            Orçamento/EAP
+          </Link>
+          <Link href="/app/campo/hoje" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-emerald-800">
+            <ClipboardList size={18} />
+            RDO
+          </Link>
           {futureItems.map(({ label, icon: Icon }) => (
             <div key={label} className="flex items-center justify-between rounded-xl px-3 py-3 text-sm text-slate-400">
               <span className="flex items-center gap-3"><Icon size={18} />{label}</span>
@@ -130,10 +136,10 @@ export function AppShell({
 
       <nav aria-label="Navegação de campo" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-4 border-t border-slate-200 bg-white px-1 pb-[max(env(safe-area-inset-bottom),8px)] pt-2 lg:hidden">
         {[
-          { href: "/app", label: "Hoje", icon: CalendarDays, active: true },
-          { href: "/app/campo/registrar", label: "Registrar", icon: ClipboardList },
-          { href: "/app/campo/foto", label: "Foto", icon: Camera },
-          { href: "/app/campo/problema", label: "Problema", icon: CircleAlert },
+          { href: "/app/campo/hoje", label: "Hoje", icon: CalendarDays, active: true },
+          { href: "/app/campo/hoje", label: "Registrar", icon: ClipboardList },
+          { href: "/app/campo/hoje#fotos", label: "Foto", icon: Camera },
+          { href: "/app/campo/hoje#ocorrencias", label: "Problema", icon: CircleAlert },
         ].map(({ href, label, icon: Icon, active }) => (
           <Link key={label} href={href} className={`flex min-h-14 flex-col items-center justify-center gap-1 text-[10px] font-semibold ${active ? "text-emerald-800" : "text-slate-500"}`}>
             <Icon size={19} strokeWidth={active ? 2.4 : 1.9} />

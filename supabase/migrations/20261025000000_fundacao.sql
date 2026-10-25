@@ -611,17 +611,29 @@ with check (
   public.obx_fn_pode_registrar_campo(obra_id)
   and criado_por = auth.uid()
   and (
-    status = 'rascunho'
-    or public.obx_fn_perfil_na_empresa((
-      select o.empresa_id from public.obx_obras as o where o.id = obra_id
-    )) in ('diretor', 'engenheiro')
+    status <> 'confirmado'
+    or (
+      public.obx_fn_perfil_na_empresa((
+        select o.empresa_id from public.obx_obras as o where o.id = obra_id
+      )) in ('diretor', 'engenheiro')
+      and confirmado_por = auth.uid()
+    )
   )
 );
 create policy obx_rdos_update on public.obx_rdos for update to authenticated
 using (public.obx_fn_pode_editar_rdo(id))
 with check (
   public.obx_fn_pode_editar_rdo(id)
-  and (status <> 'confirmado' or confirmado_por is not null)
+  and public.obx_fn_pode_registrar_campo(obra_id)
+  and (
+    status <> 'confirmado'
+    or (
+      public.obx_fn_perfil_na_empresa((
+        select o.empresa_id from public.obx_obras as o where o.id = obra_id
+      )) in ('diretor', 'engenheiro')
+      and confirmado_por = auth.uid()
+    )
+  )
 );
 create policy obx_rdos_delete on public.obx_rdos for delete to authenticated
 using (status = 'rascunho' and public.obx_fn_pode_registrar_campo(obra_id));

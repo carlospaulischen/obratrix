@@ -5,8 +5,9 @@ import { getDatabaseUrl } from "./schema-catalog";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-if (!supabaseUrl || !serviceRoleKey) {
-  throw new Error("Defina NEXT_PUBLIC_SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY.");
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+if (!supabaseUrl || !serviceRoleKey || !anonKey) {
+  throw new Error("Defina NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY e SUPABASE_SERVICE_ROLE_KEY.");
 }
 
 const admin = createClient(supabaseUrl, serviceRoleKey, {
@@ -70,6 +71,10 @@ if (auditInsertGrants[0]?.authenticated || auditInsertGrants[0]?.service_role) {
 const temporaryEmail = `rls-check-${randomUUID()}@obratrix.test`;
 let temporaryUserId: string | undefined;
 let temporaryCompanyId: string | undefined;
+let temporaryRdoId: string | undefined;
+const temporaryRdoIds: string[] = [];
+const temporaryAuthUsers: string[] = [];
+const uploadedStoragePaths: string[] = [];
 
 try {
   const { data: createdUser, error: createUserError } = await admin.auth.admin.createUser({
@@ -91,6 +96,158 @@ try {
     insert into public.obx_empresa_membros (empresa_id, usuario_id, perfil)
     values (${temporaryCompanyId}, ${temporaryUserId}, 'diretor')
   `;
+  const temporaryRdo = await sql<{ id: string }[]>`
+    insert into public.obx_rdos (obra_id, data, criado_por)
+    values (${workId}, current_date + 100, ${foremanId})
+    returning id
+  `;
+  const draftRdoId = temporaryRdo[0]!.id;
+  temporaryRdoId = draftRdoId;
+
+  const emptyPayload = {
+    clima_manha: null,
+    clima_tarde: null,
+    observacoes: "",
+    mao_obra: [],
+    producao: [],
+    equipamentos: [],
+    materiais: [],
+    ocorrencias: [],
+  };
+  const savedRdo = await assertAsUser(foremanId, async (tx) => (
+    tx<{ id: string }[]>`
+      select public.obx_fn_salvar_rdo(
+        ${workId},
+        current_date - 200,
+        ${sql.json(emptyPayload)}
+      ) as id
+    `
+  ));
+  const savedRdoId = savedRdo[0]?.id;
+  if (!savedRdoId) throw new Error("Encarregado membro não salvou o RDO pela RPC.");
+  temporaryRdoIds.push(savedRdoId);
+  console.log("PASS: encarregado membro salva RDO de rascunho pela RPC.");
+
+  const otherWorkRdo = await sql<{ id: string }[]>`
+    insert into public.obx_rdos (obra_id, data, criado_por)
+    values (${workRows[1]!.id}, current_date - 200, ${foremanId})
+    returning id
+  `;
+  temporaryRdoIds.push(otherWorkRdo[0]!.id);
+
+  const nonMemberEmail = `rls-nonmember-${randomUUID()}@obratrix.test`;
+  const nonMemberPassword = `${randomUUID()}aA1!`;
+  const { data: nonMemberCreated, error: nonMemberError } = await admin.auth.admin.createUser({
+    email: nonMemberEmail,
+    password: nonMemberPassword,
+    email_confirm: true,
+    user_metadata: { nome: "Encarregado sem obra" },
+  });
+  if (nonMemberError || !nonMemberCreated.user) throw nonMemberError ?? new Error("Falha ao criar encarregado sem obra.");
+  temporaryAuthUsers.push(nonMemberCreated.user.id);
+  await sql`
+    insert into public.obx_empresa_membros (empresa_id, usuario_id, perfil)
+    values (${companies[0]!.id}, ${nonMemberCreated.user.id}, 'encarregado')
+  `;
+
+  let nonMemberSaveBlocked = false;
+  try {
+    await assertAsUser(nonMemberCreated.user.id, async (tx) => (
+      tx`
+        select public.obx_fn_salvar_rdo(
+          ${workRows[1]!.id},
+          current_date - 202,
+          ${JSON.stringify(emptyPayload)}::jsonb
+        )
+      `
+    ));
+  } catch {
+    nonMemberSaveBlocked = true;
+  }
+  if (!nonMemberSaveBlocked) throw new Error("Encarregado sem vínculo conseguiu salvar RDO.");
+  console.log("PASS: encarregado não membro não consegue salvar RDO.");
+
+  const confirmedRdo = await sql<{ id: string }[]>`
+    insert into public.obx_rdos (obra_id, data, criado_por, status, confirmado_por, confirmado_em)
+    values (${workId}, current_date - 201, ${foremanId}, 'confirmado', ${engineerId}, now())
+    returning id
+  `;
+  temporaryRdoIds.push(confirmedRdo[0]!.id);
+  let confirmedRdoSaveBlocked = false;
+  try {
+    await assertAsUser(foremanId, async (tx) => (
+      tx`
+        select public.obx_fn_salvar_rdo(
+          ${workId},
+          current_date - 201,
+          ${JSON.stringify(emptyPayload)}::jsonb
+        )
+      `
+    ));
+  } catch {
+    confirmedRdoSaveBlocked = true;
+  }
+  if (!confirmedRdoSaveBlocked) throw new Error("Encarregado conseguiu alterar RDO confirmado.");
+  console.log("PASS: encarregado não consegue alterar RDO confirmado.");
+
+  const storageUser = async (profile: "encarregado" | "financeiro", addWorkMember: boolean) => {
+    const email = `storage-${randomUUID()}@obratrix.test`;
+    const password = `${randomUUID()}aA1!`;
+    const { data, error } = await admin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { nome: "Usuário de teste do Storage" },
+    });
+    if (error || !data.user) throw error ?? new Error("Falha ao criar usuário de Storage.");
+    temporaryAuthUsers.push(data.user.id);
+    await sql`
+      insert into public.obx_empresa_membros (empresa_id, usuario_id, perfil)
+      values (${companies[0]!.id}, ${data.user.id}, ${profile})
+    `;
+    if (addWorkMember) {
+      await sql`
+        insert into public.obx_obra_membros (obra_id, usuario_id)
+        values (${workId}, ${data.user.id})
+      `;
+    }
+    const client = createClient(supabaseUrl!, anonKey!, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { error: signInError } = await client.auth.signInWithPassword({ email, password });
+    if (signInError) throw signInError;
+    return client;
+  };
+
+  const storageMember = await storageUser("encarregado", true);
+  const allowedPath = `${workId}/${savedRdoId}/${randomUUID()}.jpg`;
+  const allowedUpload = await storageMember.storage.from("obx_fotos").upload(
+    allowedPath,
+    new Uint8Array([255, 216, 255, 217]),
+    { contentType: "image/jpeg" },
+  );
+  if (allowedUpload.error) throw new Error(`Encarregado membro não conseguiu enviar foto: ${allowedUpload.error.message}`);
+  uploadedStoragePaths.push(allowedPath);
+  console.log("PASS: encarregado membro consegue enviar foto no Storage.");
+
+  const storageNonMember = await storageUser("encarregado", false);
+  const blockedNonMemberPath = `${workRows[1]!.id}/${otherWorkRdo[0]!.id}/${randomUUID()}.jpg`;
+  const blockedNonMemberUpload = await storageNonMember.storage.from("obx_fotos").upload(
+    blockedNonMemberPath,
+    new Uint8Array([255, 216, 255, 217]),
+    { contentType: "image/jpeg" },
+  );
+  if (!blockedNonMemberUpload.error) throw new Error("Encarregado sem vínculo enviou foto para obra alheia.");
+  console.log("PASS: Storage bloqueia upload em obra sem vínculo.");
+
+  const storageFinance = await storageUser("financeiro", false);
+  const blockedFinanceUpload = await storageFinance.storage.from("obx_fotos").upload(
+    `${workId}/${savedRdoId}/${randomUUID()}.jpg`,
+    new Uint8Array([255, 216, 255, 217]),
+    { contentType: "image/jpeg" },
+  );
+  if (!blockedFinanceUpload.error) throw new Error("Financeiro conseguiu enviar foto ao Storage.");
+  console.log("PASS: Storage bloqueia upload pelo perfil financeiro.");
 
   const unrelatedWorks = await assertAsUser(temporaryUserId, async (tx) => (
     tx<{ id: string }[]>`select id from public.obx_obras where empresa_id = ${companies[0]!.id}`
@@ -153,6 +310,73 @@ try {
   if (engineerEapUpdate.length !== 1) throw new Error("Engenheiro membro não conseguiu editar EAP.");
   console.log("PASS: engenheiro vinculado pode editar EAP.");
 
+  let foremanConfirmationBlocked = false;
+  try {
+    await assertAsUser(foremanId, async (tx) => (
+      tx`
+        update public.obx_rdos
+        set status = 'confirmado', confirmado_por = ${foremanId}, confirmado_em = now()
+        where id = ${draftRdoId}
+      `
+    ));
+  } catch (error) {
+    foremanConfirmationBlocked = isRlsDenied(error);
+  }
+  if (!foremanConfirmationBlocked) {
+    throw new Error("Encarregado conseguiu confirmar um RDO.");
+  }
+  console.log("PASS: encarregado não consegue confirmar RDO.");
+
+  const engineerConfirmation = await assertAsUser(engineerId, async (tx) => {
+    await tx`savepoint obx_test_rdo_confirmation`;
+    const updated = await tx<{ id: string }[]>`
+      update public.obx_rdos
+      set status = 'confirmado', confirmado_por = ${engineerId}, confirmado_em = now()
+      where id = ${draftRdoId}
+      returning id
+    `;
+    await tx`rollback to savepoint obx_test_rdo_confirmation`;
+    return updated;
+  });
+  if (engineerConfirmation.length !== 1) {
+    throw new Error("Engenheiro membro não conseguiu confirmar RDO.");
+  }
+  console.log("PASS: engenheiro membro consegue confirmar RDO.");
+
+  let forgedConfirmationBlocked = false;
+  try {
+    await assertAsUser(engineerId, async (tx) => (
+      tx`
+        update public.obx_rdos
+        set status = 'confirmado', confirmado_por = ${directorId}, confirmado_em = now()
+        where id = ${draftRdoId}
+      `
+    ));
+  } catch (error) {
+    forgedConfirmationBlocked = isRlsDenied(error);
+  }
+  if (!forgedConfirmationBlocked) {
+    throw new Error("Engenheiro conseguiu confirmar RDO em nome de outro usuário.");
+  }
+  console.log("PASS: RDO não pode ser confirmado em nome de outro usuário.");
+
+  let moveToUnassignedWorkBlocked = false;
+  try {
+    await assertAsUser(foremanId, async (tx) => (
+      tx`
+        update public.obx_rdos
+        set obra_id = ${workRows[1]!.id}
+        where id = ${draftRdoId}
+      `
+    ));
+  } catch (error) {
+    moveToUnassignedWorkBlocked = isRlsDenied(error);
+  }
+  if (!moveToUnassignedWorkBlocked) {
+    throw new Error("Encarregado conseguiu mover RDO para uma obra sem vínculo.");
+  }
+  console.log("PASS: RDO não pode ser movido para obra sem vínculo.");
+
   const directorAudit = await assertAsUser(directorId, async (tx) => (
     tx<{ total: number }[]>`
       select count(*)::int as total from public.obx_auditoria where empresa_id = ${companies[0]!.id}
@@ -174,6 +398,18 @@ try {
   if (profile.length !== 1) throw new Error("O trigger de auth.users não criou o perfil do usuário.");
   console.log("PASS: trigger obx_trg_novo_usuario criou o perfil de usuário.");
 } finally {
+  if (uploadedStoragePaths.length) {
+    await admin.storage.from("obx_fotos").remove(uploadedStoragePaths);
+  }
+  if (temporaryRdoIds.length) {
+    await sql`delete from public.obx_rdos where id in ${sql(temporaryRdoIds)}`;
+  }
+  if (temporaryRdoId) {
+    await sql`delete from public.obx_rdos where id = ${temporaryRdoId}`;
+  }
+  for (const userId of temporaryAuthUsers) {
+    await admin.auth.admin.deleteUser(userId);
+  }
   if (temporaryCompanyId) {
     await sql`delete from public.obx_empresas where id = ${temporaryCompanyId}`;
   }
@@ -181,4 +417,10 @@ try {
     await admin.auth.admin.deleteUser(temporaryUserId);
   }
   await sql.end();
+}
+
+function isRlsDenied(error: unknown) {
+  const postgresError = error as { code?: string; message?: string };
+  return postgresError.code === "42501"
+    && postgresError.message?.toLowerCase().includes("row-level security") === true;
 }
