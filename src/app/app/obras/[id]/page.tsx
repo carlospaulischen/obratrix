@@ -24,6 +24,8 @@ const statusLabels: Record<string, string> = {
 export default async function WorkDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { supabase, company, perfil } = await getCompanyContext();
+  const today = dataHoje(company.fuso_horario);
+  const weekStart = inicioDaSemana(today);
   const { data: work } = await supabase
     .from("obx_obras")
     .select("id,codigo,nome,cliente,endereco,cidade,uf,data_inicio,data_fim_prevista,valor_contrato,status")
@@ -36,7 +38,7 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
     supabase.from("obx_vw_obra_resumo").select("orcado_total,custo_realizado,valor_executado,avanco_fisico_pct,avanco_planejado_pct").eq("obra_id", id).maybeSingle(),
     supabase.from("obx_obra_membros").select("usuario_id").eq("obra_id", id),
     supabase.from("obx_rdos").select("id,data,status").eq("obra_id", id).order("data", { ascending: false }).limit(5),
-    supabase.from("obx_rdos").select("id").eq("obra_id", id).gte("data", inicioDaSemana(dataHoje())).lte("data", dataHoje()),
+    supabase.from("obx_rdos").select("id").eq("obra_id", id).gte("data", weekStart).lte("data", today),
   ]);
   const recentRdoIds = (recentRdos ?? []).map((rdo) => rdo.id);
   const weekRdoIds = (weekRdos ?? []).map((rdo) => rdo.id);
@@ -156,7 +158,7 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
 
         <article className="rounded-2xl border border-slate-200/70 bg-white p-5 sm:p-6">
           <h2 className="font-bold text-slate-900">Produção da semana</h2>
-          <p className="mt-1 text-xs text-slate-500">Quantidades lançadas desde {formatDate(inicioDaSemana(dataHoje()), company.locale)}.</p>
+          <p className="mt-1 text-xs text-slate-500">Quantidades lançadas desde {formatDate(weekStart, company.locale)}.</p>
           <div className="mt-4 divide-y divide-slate-100">
             {weeklySummary.map((service) => (
               <div key={service.id} className="flex items-center justify-between gap-3 py-3">

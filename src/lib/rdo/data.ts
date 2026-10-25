@@ -1,6 +1,6 @@
-export function dataHoje() {
+export function dataHoje(fusoHorario = "America/Sao_Paulo") {
   return new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "America/Sao_Paulo",
+    timeZone: fusoHorario,
   }).format(new Date());
 }
 

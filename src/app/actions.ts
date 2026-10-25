@@ -406,11 +406,13 @@ const rdoIdRequestSchema = z.object({
 export async function saveRdoAction(input: unknown): Promise<ActionState & { rdoId?: string }> {
   const request = rdoSaveRequestSchema.safeParse(input);
   if (!request.success) return { error: request.error.issues[0]?.message ?? "Confira os dados do RDO." };
-  if (request.data.data > dataHoje()) return { error: "Não é possível registrar um RDO em uma data futura." };
   const payload = rdoPayloadSchema.safeParse(request.data.payload);
   if (!payload.success) return { error: payload.error.issues[0]?.message ?? "Confira os campos do RDO." };
 
   const { supabase, company } = await getCompanyContext();
+  if (request.data.data > dataHoje(company.fuso_horario)) {
+    return { error: "Não é possível registrar um RDO em uma data futura." };
+  }
   const { data: work } = await supabase
     .from("obx_obras")
     .select("id")

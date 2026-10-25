@@ -12,15 +12,23 @@ declare
   v_rdo_id uuid;
   v_existing_id uuid;
   v_item jsonb;
+  v_fuso_horario text;
 begin
   if auth.uid() is null then
     raise exception 'Entre na sua conta para salvar o RDO.';
   end if;
-  if p_data > current_date then
-    raise exception 'Não é possível registrar um RDO em uma data futura.';
-  end if;
   if not public.obx_fn_pode_registrar_campo(p_obra_id) then
     raise exception 'Você não tem permissão para registrar campo nesta obra.';
+  end if;
+  select e.fuso_horario into v_fuso_horario
+  from public.obx_obras as o
+  join public.obx_empresas as e on e.id = o.empresa_id
+  where o.id = p_obra_id;
+  if v_fuso_horario is null then
+    raise exception 'Não foi possível identificar o fuso horário da empresa.';
+  end if;
+  if p_data > (now() at time zone v_fuso_horario)::date then
+    raise exception 'Não é possível registrar um RDO em uma data futura.';
   end if;
   if jsonb_typeof(p_payload) is distinct from 'object' then
     raise exception 'Os dados do RDO são inválidos.';

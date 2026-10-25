@@ -9,6 +9,7 @@ import { dataHoje } from "@/lib/rdo/data";
 export default async function WorkRdoListPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { supabase, company } = await getCompanyContext();
+  const today = dataHoje(company.fuso_horario);
   const { data: work } = await supabase
     .from("obx_obras")
     .select("id,codigo,nome")
@@ -51,7 +52,7 @@ export default async function WorkRdoListPage({ params }: { params: Promise<{ id
           <p className="mt-2 text-sm text-slate-500">Registros diários, equipe presente e ocorrências.</p>
         </div>
         {canRegister && (
-          <Link href={`/app/obras/${work.id}/rdo/${dataHoje()}`} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-800 px-4 text-sm font-semibold text-white">
+          <Link href={`/app/obras/${work.id}/rdo/${today}`} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-800 px-4 text-sm font-semibold text-white">
             <Plus size={17} /> RDO de hoje
           </Link>
         )}

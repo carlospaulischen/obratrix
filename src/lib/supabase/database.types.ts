@@ -167,14 +167,14 @@ isOneToOne: false
                   ]
                 },"obx_empresas": {
                   Row: {
-                    "cnpj": string | null,"created_at": string,"id": string,"locale": string,"moeda": string,"nome": string,"updated_at": string
+                    "cnpj": string | null,"created_at": string,"fuso_horario": string,"id": string,"locale": string,"moeda": string,"nome": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "cnpj"?: string | null,"created_at"?: string,"id"?: string,"locale"?: string,"moeda"?: string,"nome": string,"updated_at"?: string
+                    "cnpj"?: string | null,"created_at"?: string,"fuso_horario"?: string,"id"?: string,"locale"?: string,"moeda"?: string,"nome": string,"updated_at"?: string
                   }
                   Update: {
-                    "cnpj"?: string | null,"created_at"?: string,"id"?: string,"locale"?: string,"moeda"?: string,"nome"?: string,"updated_at"?: string
+                    "cnpj"?: string | null,"created_at"?: string,"fuso_horario"?: string,"id"?: string,"locale"?: string,"moeda"?: string,"nome"?: string,"updated_at"?: string
                   }
                   Relationships: [
 

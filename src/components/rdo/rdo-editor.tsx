@@ -2,8 +2,9 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useId, useMemo, useState, useTransition } from "react";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
+import type { FieldPath } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   confirmRdoAction,
@@ -61,6 +62,14 @@ const climaOptions = [
 const sectionClass = "rounded-2xl border border-slate-200 bg-white p-4 sm:p-6";
 const inputClass = "min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50";
 
+function InlineFieldError({ id, message }: { id: string; message?: string }) {
+  return message ? <span id={id} role="alert" className="block text-xs font-semibold text-rose-700">{message}</span> : null;
+}
+
+function fieldErrorId(name: string) {
+  return `rdo-error-${name.replaceAll(".", "-")}`;
+}
+
 export function RdoEditor({
   workId,
   workName,
@@ -79,9 +88,9 @@ export function RdoEditor({
   const [photos, setPhotos] = useState(initialPhotos);
   const [photoEapItemId, setPhotoEapItemId] = useState("");
   const [photoBusy, setPhotoBusy] = useState(false);
-  const [serviceSearch, setServiceSearch] = useState<Record<number, string>>({});
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const serviceListPrefix = useId().replaceAll(":", "");
   const form = useForm<RdoPayloadForm, unknown, RdoPayload>({
     resolver: zodResolver(rdoPayloadSchema),
     defaultValues: initialPayload ?? emptyRdoPayload(),
@@ -93,6 +102,18 @@ export function RdoEditor({
   const occurrences = useFieldArray({ control: form.control, name: "ocorrencias" });
   const watchedProduction = useWatch({ control: form.control, name: "producao" });
   const serviceById = useMemo(() => new Map(services.map((service) => [service.id, service])), [services]);
+  const fieldError = (name: FieldPath<RdoPayloadForm>) =>
+    form.getFieldState(name, form.formState).error?.message;
+  const errorClass = (message?: string) =>
+    message ? "border-rose-500 focus:border-rose-600 focus:ring-rose-100" : "";
+  const focusFirstError = () => {
+    requestAnimationFrame(() => {
+      const firstInvalid = document.querySelector<HTMLElement>('[aria-invalid="true"]');
+      if (!firstInvalid) return;
+      firstInvalid.scrollIntoView({ behavior: "smooth", block: "center" });
+      firstInvalid.focus({ preventScroll: true });
+    });
+  };
 
   const save = (payload: RdoPayload) => {
     setError("");
@@ -128,10 +149,16 @@ export function RdoEditor({
     setError("");
     setMessage("");
     try {
+      if (!(await form.trigger())) {
+        setError("Corrija os campos destacados antes de anexar a foto.");
+        focusFirstError();
+        return;
+      }
       const currentValues = form.getValues();
       const validation = rdoPayloadSchema.safeParse(currentValues);
       if (!validation.success) {
-        setError(validation.error.issues[0]?.message ?? "Corrija os campos antes de anexar uma foto.");
+        setError(validation.error.issues[0]?.message ?? "Corrija os campos destacados antes de anexar a foto.");
+        focusFirstError();
         return;
       }
       const saved = await saveRdoAction({ obraId: workId, data: date, payload: validation.data });
@@ -206,6 +233,7 @@ export function RdoEditor({
 
   const registerNumber = (name: Parameters<typeof form.register>[0]) =>
     form.register(name as never, { setValueAs: (value: string) => value === "" ? 0 : Number(value) });
+  const observationsError = fieldError("observacoes");
 
   return (
     <div className="space-y-5">
@@ -227,10 +255,13 @@ export function RdoEditor({
 
       <form
         id="rdo-form"
-        onSubmit={form.handleSubmit(save, () => setError("Revise os campos preenchidos e tente novamente."))}
+        onSubmit={form.handleSubmit(save, () => {
+          setError("Corrija os campos destacados antes de salvar.");
+          focusFirstError();
+        })}
         className="space-y-4"
       >
-        <fieldset disabled={!canEdit || pending} className="space-y-4 disabled:opacity-90">
+        <fieldset disabled={!canEdit || pending || photoBusy} className="space-y-4 disabled:opacity-90">
           <details open className={sectionClass}>
             <summary className="cursor-pointer text-base font-bold text-slate-900">Clima</summary>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -249,15 +280,27 @@ export function RdoEditor({
           <details open className={sectionClass}>
             <summary className="cursor-pointer text-base font-bold text-slate-900">Mão de obra</summary>
             <div className="mt-4 space-y-3">
-              {labor.fields.map((field, index) => (
-                <div key={field.id} className="grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_100px_100px_auto]">
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Função<input {...form.register(`mao_obra.${index}.funcao`)} className={inputClass} placeholder="Ex.: Pedreiro" /></label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Pessoas<input type="number" min="0" step="1" {...registerNumber(`mao_obra.${index}.quantidade`)} className={inputClass} /></label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Horas<input type="number" min="0" step="0.5" {...registerNumber(`mao_obra.${index}.horas`)} className={inputClass} /></label>
-                  <button type="button" onClick={() => labor.remove(index)} className="self-end rounded-lg px-3 py-2 text-xs font-semibold text-rose-700">Remover</button>
-                </div>
-              ))}
-              <button type="button" onClick={() => labor.append({ funcao: "", quantidade: 0, horas: 0 })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-emerald-800">+ Adicionar função</button>
+              {labor.fields.map((field, index) => {
+                const quantityPath = `mao_obra.${index}.quantidade` as const;
+                const hoursPath = `mao_obra.${index}.horas` as const;
+                const quantityError = fieldError(quantityPath);
+                const hoursError = fieldError(hoursPath);
+                return (
+                  <div key={field.id} className="grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_100px_100px_auto]">
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Função<input {...form.register(`mao_obra.${index}.funcao`)} className={inputClass} placeholder="Ex.: Pedreiro" /></label>
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Pessoas
+                      <input type="number" min="0" step="1" {...registerNumber(quantityPath)} className={`${inputClass} ${errorClass(quantityError)}`} aria-invalid={quantityError ? true : undefined} aria-describedby={quantityError ? fieldErrorId(quantityPath) : undefined} />
+                      <InlineFieldError id={fieldErrorId(quantityPath)} message={quantityError} />
+                    </label>
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Horas
+                      <input type="number" min="0" step="0.5" {...registerNumber(hoursPath)} className={`${inputClass} ${errorClass(hoursError)}`} aria-invalid={hoursError ? true : undefined} aria-describedby={hoursError ? fieldErrorId(hoursPath) : undefined} />
+                      <InlineFieldError id={fieldErrorId(hoursPath)} message={hoursError} />
+                    </label>
+                    {canEdit && <button type="button" onClick={() => labor.remove(index)} className="self-end rounded-lg px-3 py-2 text-xs font-semibold text-rose-700">Remover</button>}
+                  </div>
+                );
+              })}
+              {canEdit && <button type="button" onClick={() => labor.append({ funcao: "", quantidade: 0, horas: 0 })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-emerald-800">+ Adicionar função</button>}
             </div>
           </details>
 
@@ -269,90 +312,131 @@ export function RdoEditor({
                 const selected = currentId ? serviceById.get(currentId) : undefined;
                 const amount = Number(watchedProduction[index]?.quantidade ?? 0);
                 const saldo = selected ? calcularSaldo(selected.quantidade, selected.executada) : 0;
-                const listId = `eap-servicos-${field.id}`;
+                const servicePath = `producao.${index}.eap_item_id` as const;
+                const quantityPath = `producao.${index}.quantidade` as const;
+                const serviceError = fieldError(servicePath);
+                const quantityError = fieldError(quantityPath);
+                const listId = `eap-servicos-${serviceListPrefix}-${index}`;
+                const search = watchedProduction[index]?.servico_busca ?? "";
                 return (
                   <div key={field.id} className="rounded-xl bg-slate-50 p-3">
                     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px_auto]">
-                      <label className="space-y-1 text-xs font-semibold text-slate-500">Serviço da EAP
+                      <label className={`space-y-1 text-xs font-semibold ${serviceError ? "text-rose-700" : "text-slate-500"}`}>Serviço da EAP
                         <input
                           list={listId}
-                          value={serviceSearch[index] ?? (selected ? `${selected.codigo} — ${selected.descricao}` : "")}
+                          value={search || (selected ? `${selected.codigo} — ${selected.descricao}` : "")}
                           onChange={(event) => {
                             const value = event.target.value;
-                            setServiceSearch((current) => ({ ...current, [index]: value }));
+                            form.setValue(`producao.${index}.servico_busca`, value, { shouldDirty: true });
                             const match = services.find((service) => `${service.codigo} — ${service.descricao}` === value);
-                            form.setValue(`producao.${index}.eap_item_id`, match?.id ?? "", { shouldDirty: true, shouldValidate: true });
+                            form.setValue(servicePath, match?.id ?? "", { shouldDirty: true, shouldValidate: true });
                           }}
-                          className={inputClass}
+                          className={`${inputClass} ${errorClass(serviceError)}`}
+                          aria-invalid={serviceError ? true : undefined}
+                          aria-describedby={serviceError ? fieldErrorId(servicePath) : undefined}
                           placeholder="Pesquise código ou serviço"
                         />
                         <datalist id={listId}>{services.map((service) => <option key={service.id} value={`${service.codigo} — ${service.descricao}`} />)}</datalist>
-                        <input type="hidden" {...form.register(`producao.${index}.eap_item_id`)} />
+                        <InlineFieldError id={fieldErrorId(servicePath)} message={serviceError} />
+                        <input type="hidden" {...form.register(servicePath)} />
                       </label>
                       <label className="space-y-1 text-xs font-semibold text-slate-500">Quantidade {selected?.unidade ? `(${selected.unidade})` : ""}
-                        <input type="number" min="0" step="0.01" {...registerNumber(`producao.${index}.quantidade`)} className={inputClass} />
+                        <input type="number" min="0" step="0.01" {...registerNumber(quantityPath)} className={`${inputClass} ${errorClass(quantityError)}`} aria-invalid={quantityError ? true : undefined} aria-describedby={quantityError ? fieldErrorId(quantityPath) : undefined} />
+                        <InlineFieldError id={fieldErrorId(quantityPath)} message={quantityError} />
                       </label>
-                      <button type="button" onClick={() => production.remove(index)} className="self-end rounded-lg px-3 py-2 text-xs font-semibold text-rose-700">Remover</button>
+                      {canEdit && <button type="button" onClick={() => production.remove(index)} className="self-end rounded-lg px-3 py-2 text-xs font-semibold text-rose-700">Remover</button>}
                     </div>
                     {selected && <p className="mt-2 text-xs text-slate-500">Saldo antes deste RDO: {formatNumber(saldo, "pt-BR")} {selected.unidade ?? ""}</p>}
                     {selected && amount > saldo && <p className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">A quantidade informada ultrapassa o saldo em {formatNumber(amount - saldo, "pt-BR")} {selected.unidade ?? ""}. O lançamento não será bloqueado.</p>}
                   </div>
                 );
               })}
-              <button type="button" onClick={() => production.append({ eap_item_id: "", quantidade: 0, observacao: "" })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-emerald-800">+ Registrar produção</button>
+              {canEdit && <button type="button" onClick={() => production.append({ eap_item_id: "", servico_busca: "", quantidade: 0, observacao: "" })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-emerald-800">+ Registrar produção</button>}
             </div>
           </details>
 
           <details open className={sectionClass}>
             <summary className="cursor-pointer text-base font-bold text-slate-900">Equipamentos</summary>
             <div className="mt-4 space-y-3">
-              {equipment.fields.map((field, index) => (
-                <div key={field.id} className="grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_120px_120px_minmax(0,1fr)_auto]">
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Equipamento<input {...form.register(`equipamentos.${index}.equipamento`)} className={inputClass} placeholder="Ex.: Betoneira" /></label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Trabalhadas<input type="number" min="0" step="0.5" {...registerNumber(`equipamentos.${index}.horas_trabalhadas`)} className={inputClass} /></label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Paradas<input type="number" min="0" step="0.5" {...registerNumber(`equipamentos.${index}.horas_paradas`)} className={inputClass} /></label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Motivo da parada<input {...form.register(`equipamentos.${index}.motivo_parada`)} className={inputClass} /></label>
-                  <button type="button" onClick={() => equipment.remove(index)} className="self-end rounded-lg px-3 py-2 text-xs font-semibold text-rose-700">Remover</button>
-                </div>
-              ))}
-              <button type="button" onClick={() => equipment.append({ equipamento: "", horas_trabalhadas: 0, horas_paradas: 0, motivo_parada: "" })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-emerald-800">+ Adicionar equipamento</button>
+              {equipment.fields.map((field, index) => {
+                const workedPath = `equipamentos.${index}.horas_trabalhadas` as const;
+                const stoppedPath = `equipamentos.${index}.horas_paradas` as const;
+                const workedError = fieldError(workedPath);
+                const stoppedError = fieldError(stoppedPath);
+                return (
+                  <div key={field.id} className="grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_120px_120px_minmax(0,1fr)_auto]">
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Equipamento<input {...form.register(`equipamentos.${index}.equipamento`)} className={inputClass} placeholder="Ex.: Betoneira" /></label>
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Trabalhadas
+                      <input type="number" min="0" step="0.5" {...registerNumber(workedPath)} className={`${inputClass} ${errorClass(workedError)}`} aria-invalid={workedError ? true : undefined} aria-describedby={workedError ? fieldErrorId(workedPath) : undefined} />
+                      <InlineFieldError id={fieldErrorId(workedPath)} message={workedError} />
+                    </label>
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Paradas
+                      <input type="number" min="0" step="0.5" {...registerNumber(stoppedPath)} className={`${inputClass} ${errorClass(stoppedError)}`} aria-invalid={stoppedError ? true : undefined} aria-describedby={stoppedError ? fieldErrorId(stoppedPath) : undefined} />
+                      <InlineFieldError id={fieldErrorId(stoppedPath)} message={stoppedError} />
+                    </label>
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Motivo da parada<input {...form.register(`equipamentos.${index}.motivo_parada`)} className={inputClass} /></label>
+                    {canEdit && <button type="button" onClick={() => equipment.remove(index)} className="self-end rounded-lg px-3 py-2 text-xs font-semibold text-rose-700">Remover</button>}
+                  </div>
+                );
+              })}
+              {canEdit && <button type="button" onClick={() => equipment.append({ equipamento: "", horas_trabalhadas: 0, horas_paradas: 0, motivo_parada: "" })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-emerald-800">+ Adicionar equipamento</button>}
             </div>
           </details>
 
           <details open className={sectionClass}>
             <summary className="cursor-pointer text-base font-bold text-slate-900">Materiais recebidos</summary>
             <div className="mt-4 space-y-3">
-              {materials.fields.map((field, index) => (
-                <div key={field.id} className="grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_140px_120px_auto]">
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Material<input {...form.register(`materiais.${index}.material`)} className={inputClass} /></label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Quantidade<input type="number" min="0" step="0.01" {...registerNumber(`materiais.${index}.quantidade`)} className={inputClass} /></label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Unidade<input {...form.register(`materiais.${index}.unidade`)} className={inputClass} /></label>
-                  <button type="button" onClick={() => materials.remove(index)} className="self-end rounded-lg px-3 py-2 text-xs font-semibold text-rose-700">Remover</button>
-                </div>
-              ))}
-              <button type="button" onClick={() => materials.append({ material: "", quantidade: 0, unidade: "" })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-emerald-800">+ Registrar material</button>
+              {materials.fields.map((field, index) => {
+                const quantityPath = `materiais.${index}.quantidade` as const;
+                const quantityError = fieldError(quantityPath);
+                return (
+                  <div key={field.id} className="grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_140px_120px_auto]">
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Material<input {...form.register(`materiais.${index}.material`)} className={inputClass} /></label>
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Quantidade
+                      <input type="number" min="0" step="0.01" {...registerNumber(quantityPath)} className={`${inputClass} ${errorClass(quantityError)}`} aria-invalid={quantityError ? true : undefined} aria-describedby={quantityError ? fieldErrorId(quantityPath) : undefined} />
+                      <InlineFieldError id={fieldErrorId(quantityPath)} message={quantityError} />
+                    </label>
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Unidade<input {...form.register(`materiais.${index}.unidade`)} className={inputClass} /></label>
+                    {canEdit && <button type="button" onClick={() => materials.remove(index)} className="self-end rounded-lg px-3 py-2 text-xs font-semibold text-rose-700">Remover</button>}
+                  </div>
+                );
+              })}
+              {canEdit && <button type="button" onClick={() => materials.append({ material: "", quantidade: 0, unidade: "" })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-emerald-800">+ Registrar material</button>}
             </div>
           </details>
 
           <details open id="ocorrencias" className={sectionClass}>
             <summary className="cursor-pointer text-base font-bold text-slate-900">Ocorrências</summary>
             <div className="mt-4 space-y-3">
-              {occurrences.fields.map((field, index) => (
-                <div key={field.id} className="grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-[150px_minmax(0,1fr)_110px_110px_auto]">
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Tipo<input {...form.register(`ocorrencias.${index}.tipo`)} className={inputClass} placeholder="Ex.: Segurança" /></label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Descrição<input {...form.register(`ocorrencias.${index}.descricao`)} className={inputClass} /></label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Início<input type="time" {...form.register(`ocorrencias.${index}.hora_inicio`)} className={inputClass} /></label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-500">Fim<input type="time" {...form.register(`ocorrencias.${index}.hora_fim`)} className={inputClass} /></label>
-                  <button type="button" onClick={() => occurrences.remove(index)} className="self-end rounded-lg px-3 py-2 text-xs font-semibold text-rose-700">Remover</button>
-                </div>
-              ))}
-              <button type="button" onClick={() => occurrences.append({ tipo: "", descricao: "", hora_inicio: "", hora_fim: "" })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-emerald-800">+ Adicionar ocorrência</button>
+              {occurrences.fields.map((field, index) => {
+                const typePath = `ocorrencias.${index}.tipo` as const;
+                const descriptionPath = `ocorrencias.${index}.descricao` as const;
+                const typeError = fieldError(typePath);
+                const descriptionError = fieldError(descriptionPath);
+                return (
+                  <div key={field.id} className="grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-[150px_minmax(0,1fr)_110px_110px_auto]">
+                    <label className={`space-y-1 text-xs font-semibold ${typeError ? "text-rose-700" : "text-slate-500"}`}>Tipo
+                      <input {...form.register(typePath)} className={`${inputClass} ${errorClass(typeError)}`} aria-invalid={typeError ? true : undefined} aria-describedby={typeError ? fieldErrorId(typePath) : undefined} placeholder="Ex.: Segurança" />
+                      <InlineFieldError id={fieldErrorId(typePath)} message={typeError} />
+                    </label>
+                    <label className={`space-y-1 text-xs font-semibold ${descriptionError ? "text-rose-700" : "text-slate-500"}`}>Descrição
+                      <input {...form.register(descriptionPath)} className={`${inputClass} ${errorClass(descriptionError)}`} aria-invalid={descriptionError ? true : undefined} aria-describedby={descriptionError ? fieldErrorId(descriptionPath) : undefined} />
+                      <InlineFieldError id={fieldErrorId(descriptionPath)} message={descriptionError} />
+                    </label>
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Início<input type="time" {...form.register(`ocorrencias.${index}.hora_inicio`)} className={inputClass} /></label>
+                    <label className="space-y-1 text-xs font-semibold text-slate-500">Fim<input type="time" {...form.register(`ocorrencias.${index}.hora_fim`)} className={inputClass} /></label>
+                    {canEdit && <button type="button" onClick={() => occurrences.remove(index)} className="self-end rounded-lg px-3 py-2 text-xs font-semibold text-rose-700">Remover</button>}
+                  </div>
+                );
+              })}
+              {canEdit && <button type="button" onClick={() => occurrences.append({ tipo: "", descricao: "", hora_inicio: "", hora_fim: "" })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-emerald-800">+ Adicionar ocorrência</button>}
             </div>
           </details>
 
           <details open className={sectionClass}>
             <summary className="cursor-pointer text-base font-bold text-slate-900">Observações</summary>
-            <textarea {...form.register("observacoes")} rows={4} className={`${inputClass} mt-4 py-3`} placeholder="Registre informações relevantes sobre o dia." />
+            <textarea {...form.register("observacoes")} rows={4} className={`${inputClass} mt-4 py-3 ${errorClass(observationsError)}`} aria-invalid={observationsError ? true : undefined} aria-describedby={observationsError ? fieldErrorId("observacoes") : undefined} placeholder="Registre informações relevantes sobre o dia." />
+            <InlineFieldError id={fieldErrorId("observacoes")} message={observationsError} />
           </details>
         </fieldset>
       </form>
@@ -368,8 +452,8 @@ export function RdoEditor({
                 {services.map((service) => <option key={service.id} value={service.id}>{service.codigo} — {service.descricao}</option>)}
               </select>
             </label>
-            <label className={`flex min-h-11 cursor-pointer items-center justify-center rounded-xl bg-emerald-50 px-4 text-sm font-semibold text-emerald-900 ${photoBusy ? "opacity-60" : ""}`}>
-              {photoBusy ? "Enviando foto…" : "Tirar ou escolher foto"}
+            <label aria-live="polite" className={`flex min-h-11 cursor-pointer items-center justify-center rounded-xl bg-emerald-50 px-4 text-sm font-semibold text-emerald-900 ${photoBusy ? "opacity-60" : ""}`}>
+              {photoBusy ? (rdoId ? "Enviando foto…" : "Salvando rascunho e enviando foto…") : "Tirar ou escolher foto"}
               <input
                 type="file"
                 accept="image/*"

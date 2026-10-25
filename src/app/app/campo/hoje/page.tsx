@@ -6,6 +6,7 @@ import { dataHoje } from "@/lib/rdo/data";
 
 export default async function FieldTodayPage() {
   const { supabase, company } = await getCompanyContext();
+  const today = dataHoje(company.fuso_horario);
   const { data: works } = await supabase
     .from("obx_obras")
     .select("id,codigo,nome,cidade,uf")
@@ -16,19 +17,19 @@ export default async function FieldTodayPage() {
     return data ? work : null;
   }));
   const fieldWorks = permitted.filter((work): work is NonNullable<typeof work> => Boolean(work));
-  if (fieldWorks.length === 1) redirect(`/app/obras/${fieldWorks[0]!.id}/rdo/${dataHoje()}`);
+  if (fieldWorks.length === 1) redirect(`/app/obras/${fieldWorks[0]!.id}/rdo/${today}`);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <header>
         <p className="text-xs font-bold uppercase tracking-widest text-emerald-700">Registro de campo</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">Hoje</h1>
-        <p className="mt-2 text-sm text-slate-500">Escolha a obra para abrir o diário do dia {dataHoje()}.</p>
+        <p className="mt-2 text-sm text-slate-500">Escolha a obra para abrir o diário do dia {today}.</p>
       </header>
       {fieldWorks.length ? (
         <div className="space-y-3">
           {fieldWorks.map((work) => (
-            <Link key={work.id} href={`/app/obras/${work.id}/rdo/${dataHoje()}`} className="flex min-h-20 items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-emerald-300">
+            <Link key={work.id} href={`/app/obras/${work.id}/rdo/${today}`} className="flex min-h-20 items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-emerald-300">
               <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-800"><BriefcaseBusiness size={20} /></span>
               <span className="min-w-0 flex-1">
                 <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">{work.codigo}</span>

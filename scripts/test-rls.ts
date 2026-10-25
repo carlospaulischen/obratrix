@@ -39,8 +39,8 @@ const directorId = await findUserId("diretor@obratrix.demo");
 const engineerId = await findUserId("engenheiro@obratrix.demo");
 const foremanId = await findUserId("encarregado@obratrix.demo");
 const financeId = await findUserId("financeiro@obratrix.demo");
-const companies = await sql<{ id: string }[]>`
-  select id from public.obx_empresas where nome = 'Construtora Exemplo Ltda'
+const companies = await sql<{ id: string; fuso_horario: string }[]>`
+  select id, fuso_horario from public.obx_empresas where nome = 'Construtora Exemplo Ltda'
 `;
 if (!companies[0]) throw new Error("Execute pnpm db:seed antes dos testes RLS.");
 
@@ -127,6 +127,77 @@ try {
   if (!savedRdoId) throw new Error("Encarregado membro não salvou o RDO pela RPC.");
   temporaryRdoIds.push(savedRdoId);
   console.log("PASS: encarregado membro salva RDO de rascunho pela RPC.");
+
+  const invalidDateResult = await sql<{ data: string }[]>`
+    select (current_date - 203)::text as data
+  `;
+  const invalidDate = invalidDateResult[0]!.data;
+  const invalidPayload = {
+    ...emptyPayload,
+    mao_obra: [{ funcao: "Pedreiro", quantidade: "inválido", horas: 8 }],
+  };
+  let invalidPayloadRejected = false;
+  try {
+    await assertAsUser(foremanId, async (tx) => (
+      tx`
+        select public.obx_fn_salvar_rdo(
+          ${workId},
+          ${invalidDate}::date,
+          ${sql.json(invalidPayload)}
+        )
+      `
+    ));
+  } catch (error) {
+    invalidPayloadRejected = (error as { code?: string }).code === "22P02";
+  }
+  if (!invalidPayloadRejected) throw new Error("A RPC não rejeitou o payload inválido de mão de obra.");
+  const invalidPayloadRows = await sql<{
+    rdos: number;
+    mao_obra: number;
+    producao: number;
+    equipamentos: number;
+    materiais: number;
+    ocorrencias: number;
+  }[]>`
+    select
+      (select count(*)::int from public.obx_rdos where obra_id = ${workId} and data = ${invalidDate}::date) as rdos,
+      (select count(*)::int from public.obx_rdo_mao_obra m join public.obx_rdos r on r.id = m.rdo_id where r.obra_id = ${workId} and r.data = ${invalidDate}::date) as mao_obra,
+      (select count(*)::int from public.obx_rdo_producao p join public.obx_rdos r on r.id = p.rdo_id where r.obra_id = ${workId} and r.data = ${invalidDate}::date) as producao,
+      (select count(*)::int from public.obx_rdo_equipamentos e join public.obx_rdos r on r.id = e.rdo_id where r.obra_id = ${workId} and r.data = ${invalidDate}::date) as equipamentos,
+      (select count(*)::int from public.obx_rdo_materiais m join public.obx_rdos r on r.id = m.rdo_id where r.obra_id = ${workId} and r.data = ${invalidDate}::date) as materiais,
+      (select count(*)::int from public.obx_rdo_ocorrencias o join public.obx_rdos r on r.id = o.rdo_id where r.obra_id = ${workId} and r.data = ${invalidDate}::date) as ocorrencias
+  `;
+  if (Object.values(invalidPayloadRows[0]!).some((count) => count !== 0)) {
+    throw new Error("A RPC deixou o cabeçalho ou filhos de um payload inválido persistidos.");
+  }
+  console.log("PASS: payload inválido não persiste cabeçalho nem filhos do RDO.");
+
+  const futureDateResult = await sql<{ data: string }[]>`
+    select ((now() at time zone ${companies[0]!.fuso_horario})::date + 1)::text as data
+  `;
+  const futureDate = futureDateResult[0]!.data;
+  let futureDateBlocked = false;
+  try {
+    await assertAsUser(foremanId, async (tx) => (
+      tx`
+        select public.obx_fn_salvar_rdo(
+          ${workId},
+          ${futureDate}::date,
+          ${sql.json(emptyPayload)}
+        )
+      `
+    ));
+  } catch (error) {
+    futureDateBlocked = (error as { message?: string }).message?.includes("data futura") === true;
+  }
+  if (!futureDateBlocked) throw new Error("A RPC aceitou uma data futura no fuso da empresa.");
+  const futureRows = await sql<{ count: number }[]>`
+    select count(*)::int as count
+    from public.obx_rdos
+    where obra_id = ${workId} and data = ${futureDate}::date
+  `;
+  if (futureRows[0]?.count !== 0) throw new Error("A RPC deixou RDO com data futura persistido.");
+  console.log("PASS: a RPC recusa data futura calculada no fuso da empresa.");
 
   const otherWorkRdo = await sql<{ id: string }[]>`
     insert into public.obx_rdos (obra_id, data, criado_por)

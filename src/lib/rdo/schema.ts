@@ -20,6 +20,7 @@ const maoObraSchema = z.object({
 
 const producaoSchema = z.object({
   eap_item_id: identificadorOpcional,
+  servico_busca: z.string().default(""),
   quantidade: quantidadeNaoNegativa,
   observacao: textoOpcional,
 }).superRefine((linha, contexto) => {
@@ -28,6 +29,14 @@ const producaoSchema = z.object({
       code: "custom",
       path: ["quantidade"],
       message: "Informe uma quantidade maior que zero.",
+    });
+  } else if (!linha.eap_item_id && (
+    linha.servico_busca.trim() || linha.quantidade > 0 || linha.observacao
+  )) {
+    contexto.addIssue({
+      code: "custom",
+      path: ["eap_item_id"],
+      message: "Selecione um serviço da lista.",
     });
   }
 });
@@ -59,11 +68,17 @@ const ocorrenciaSchema = z.object({
   hora_inicio: z.string(),
   hora_fim: z.string(),
 }).superRefine((linha, contexto) => {
-  if ((linha.tipo.trim() || linha.descricao.trim()) && (!linha.tipo.trim() || !linha.descricao.trim())) {
+  if (!linha.tipo.trim() && linha.descricao.trim()) {
+    contexto.addIssue({
+      code: "custom",
+      path: ["tipo"],
+      message: "Informe o tipo da ocorrência.",
+    });
+  } else if (linha.tipo.trim() && !linha.descricao.trim()) {
     contexto.addIssue({
       code: "custom",
       path: ["descricao"],
-      message: "Informe o tipo e a descrição da ocorrência.",
+      message: "Informe a descrição da ocorrência.",
     });
   }
 });
@@ -80,7 +95,13 @@ export const rdoPayloadSchema = z.object({
 }).transform((payload) => ({
   ...payload,
   mao_obra: payload.mao_obra.filter((linha) => linha.funcao.trim()),
-  producao: payload.producao.filter((linha) => linha.eap_item_id),
+  producao: payload.producao
+    .filter((linha) => linha.eap_item_id)
+    .map((linha) => ({
+      eap_item_id: linha.eap_item_id,
+      quantidade: linha.quantidade,
+      observacao: linha.observacao,
+    })),
   equipamentos: payload.equipamentos.filter((linha) => linha.equipamento.trim()),
   materiais: payload.materiais.filter((linha) => linha.material.trim()),
   ocorrencias: payload.ocorrencias.filter((linha) => linha.tipo.trim() && linha.descricao.trim()),

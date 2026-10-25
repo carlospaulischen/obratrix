@@ -194,8 +194,9 @@ function requireSuccess(error: { message?: string } | null) {
   if (error) throw new Error(error.message ?? "Falha ao gravar dados de demonstração.");
 }
 
-function daysAgo(days: number) {
-  const date = new Date();
+function daysAgo(days: number, fusoHorario = "America/Sao_Paulo") {
+  const today = new Intl.DateTimeFormat("sv-SE", { timeZone: fusoHorario }).format(new Date());
+  const date = new Date(`${today}T12:00:00Z`);
   date.setUTCDate(date.getUTCDate() - days);
   return date.toISOString().slice(0, 10);
 }
@@ -247,6 +248,7 @@ async function seedCompany() {
       cnpj: "12.345.678/0001-90",
       locale: "pt-BR",
       moeda: "BRL",
+      fuso_horario: "America/Sao_Paulo",
     })
     .select("id")
     .single();
@@ -312,10 +314,11 @@ async function seedRdos(
   userIds: Map<string, string>,
   centerIds: Map<string, string>,
   workIndex: number,
+  fusoHorario: string,
 ) {
   const foremanId = userIds.get("encarregado@obratrix.demo")!;
   const directorId = userIds.get("diretor@obratrix.demo")!;
-  const dates = Array.from({ length: 30 }, (_, index) => daysAgo(29 - index));
+  const dates = Array.from({ length: 30 }, (_, index) => daysAgo(30 - index, fusoHorario));
   const rdoRows = dates.map((data, index) => ({
     id: uuidFor(`obratrix:rdo:${obraId}:${data}`),
     obra_id: obraId,
@@ -323,10 +326,10 @@ async function seedRdos(
     clima_manha: index % 9 === 0 ? "nublado" : "bom",
     clima_tarde: index % 13 === 0 ? "chuva_fraca" : "bom",
     observacoes: index % 7 === 0 ? "Conferência de materiais e alinhamento da equipe." : "Atividades conforme programação da frente.",
-    status: "confirmado",
+    status: index === dates.length - 1 ? "rascunho" : "confirmado",
     criado_por: foremanId,
-    confirmado_por: directorId,
-    confirmado_em: `${data}T17:30:00+00:00`,
+    confirmado_por: index === dates.length - 1 ? null : directorId,
+    confirmado_em: index === dates.length - 1 ? null : `${data}T17:30:00-03:00`,
   }));
   const rdoResult = await supabase
     .from("obx_rdos")
@@ -441,6 +444,14 @@ async function seedRdos(
 async function main() {
   const users = await getUsers();
   const companyId = await seedCompany();
+  const companyResult = await supabase
+    .from("obx_empresas")
+    .select("fuso_horario")
+    .eq("id", companyId)
+    .single();
+  requireSuccess(companyResult.error);
+  if (!companyResult.data) throw new Error("Não foi possível carregar o fuso horário da empresa.");
+  const fusoHorario = companyResult.data.fuso_horario;
   const userRows = people.map((person) => ({
     id: users.get(person.email)!,
     nome: person.nome,
@@ -483,8 +494,8 @@ async function main() {
       endereco: "Rua das Palmeiras, 420",
       cidade: "Campinas",
       uf: "SP",
-      data_inicio: daysAgo(95),
-      data_fim_prevista: daysAgo(-145),
+      data_inicio: daysAgo(95, fusoHorario),
+      data_fim_prevista: daysAgo(-145, fusoHorario),
       valor_contrato: 1680000,
       status: "em_andamento",
       stages: residenceStages,
@@ -496,8 +507,8 @@ async function main() {
       endereco: "Avenida Central, 1150",
       cidade: "Jundiaí",
       uf: "SP",
-      data_inicio: daysAgo(180),
-      data_fim_prevista: daysAgo(-300),
+      data_inicio: daysAgo(180, fusoHorario),
+      data_fim_prevista: daysAgo(-300, fusoHorario),
       valor_contrato: 4850000,
       status: "em_andamento",
       stages: buildingStages,
@@ -545,7 +556,7 @@ async function main() {
 
   let rdoCount = 0;
   for (let index = 0; index < workIds.length; index += 1) {
-    const result = await seedRdos(workIds[index]!, eapByWork[index]!, users, centerIds, index);
+    const result = await seedRdos(workIds[index]!, eapByWork[index]!, users, centerIds, index, fusoHorario);
     rdoCount += result.productionCount;
   }
 

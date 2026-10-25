@@ -14,8 +14,9 @@ export default async function RdoDetailPage({
   params: Promise<{ id: string; data: string }>;
 }) {
   const { id, data: date } = await params;
-  if (!dataIsoValida(date) || date > dataHoje()) notFound();
+  if (!dataIsoValida(date)) notFound();
   const { supabase, company, perfil } = await getCompanyContext();
+  if (date > dataHoje(company.fuso_horario)) notFound();
   const { data: work } = await supabase
     .from("obx_obras")
     .select("id,codigo,nome")

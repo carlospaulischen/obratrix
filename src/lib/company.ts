@@ -16,7 +16,7 @@ export async function getCompanyContext() {
 
   const { data: companies, error: companiesError } = await supabase
     .from("obx_empresas")
-    .select("id,nome,locale,moeda")
+    .select("id,nome,locale,moeda,fuso_horario")
     .in("id", memberships.map((membership) => membership.empresa_id));
   if (companiesError || !companies?.length) {
     throw new Error("Não foi possível carregar os dados da empresa.");

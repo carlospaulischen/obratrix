@@ -11,6 +11,7 @@ create table public.obx_empresas (
   cnpj text,
   locale text not null default 'pt-BR',
   moeda text not null default 'BRL',
+  fuso_horario text not null default 'America/Sao_Paulo',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
