@@ -6,8 +6,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getCompanyContext } from "@/lib/company";
 import { createClient } from "@/lib/supabase/server";
-import { dataHoje, dataIsoValida } from "@/lib/rdo/data";
+import { dataHoje, dataIsoValida, inicioDaSemana } from "@/lib/rdo/data";
 import { rdoPayloadSchema } from "@/lib/rdo/schema";
+import { carregarIndicadoresObras } from "@/lib/indicadores/carregar";
 
 export type ActionState = { error?: string; success?: string };
 
@@ -620,4 +621,121 @@ export async function savePlanoSemanalAction(input: unknown): Promise<ActionStat
 
   revalidatePath(`/app/obras/${parsed.data.obraId}/semanal`);
   return { success: "Plano semanal salvo." };
+}
+
+const perguntaSchema = z.object({
+  obraId: z.string().uuid(),
+  pergunta: z.string().trim().min(3, "Faça uma pergunta.").max(500, "Pergunta muito longa."),
+});
+
+export async function askObraAction(input: unknown): Promise<{ error?: string; resposta?: string }> {
+  const parsed = perguntaSchema.safeParse(input);
+  if (!parsed.success) return { error: "Faça uma pergunta sobre a obra." };
+
+  const { supabase, company } = await getCompanyContext();
+  const { data: work } = await supabase
+    .from("obx_obras")
+    .select("id,codigo,nome,status,data_inicio,data_fim_prevista,valor_contrato")
+    .eq("id", parsed.data.obraId)
+    .eq("empresa_id", company.id)
+    .maybeSingle();
+  if (!work) return { error: "Obra não encontrada na empresa ativa." };
+
+  const { data: canView } = await supabase.rpc("obx_fn_pode_ver_obra", { p_obra_id: work.id });
+  if (!canView) return { error: "Você não tem permissão para ver esta obra." };
+  const { data: canViewCosts } = await supabase.rpc("obx_fn_pode_ver_custo", { p_obra_id: work.id });
+
+  const hoje = dataHoje(company.fuso_horario);
+  const [indicators] = await carregarIndicadoresObras(supabase, [{
+    id: work.id,
+    codigo: work.codigo,
+    nome: work.nome,
+    status: work.status,
+    data_inicio: work.data_inicio,
+    data_fim_prevista: work.data_fim_prevista,
+  }], hoje, company.id, { locale: company.locale, moeda: company.moeda });
+  const metrics = indicators?.indicadores;
+
+  const weekStart = inicioDaSemana(hoje);
+  const { data: weekRdos } = await supabase
+    .from("obx_rdos")
+    .select("id,data,status")
+    .eq("obra_id", work.id)
+    .gte("data", weekStart)
+    .order("data", { ascending: false });
+  const weekRdoIds = (weekRdos ?? []).filter((rdo) => rdo.status === "confirmado").map((rdo) => rdo.id);
+  const { data: weekProduction } = weekRdoIds.length
+    ? await supabase.from("obx_rdo_producao").select("eap_item_id,quantidade").in("rdo_id", weekRdoIds)
+    : { data: [] };
+
+  const servicos = (metrics?.porServico ?? []).map((service) => ({
+    codigo: service.codigo,
+    descricao: service.descricao,
+    quantidadeOrcada: service.quantidadeOrcada,
+    quantidadeExecutada: service.quantidadeExecutada,
+    executadoPct: Math.round(
+      (service.quantidadeOrcada > 0 ? service.quantidadeExecutada / service.quantidadeOrcada : 0) * 100,
+    ),
+    ...(canViewCosts ? {
+      orcadoR$: service.orcado,
+      executadoR$: service.valorAgregado,
+      custoRealR$: service.custoReal,
+      desvioR$: service.custoReal - service.valorAgregado,
+    } : {}),
+  }));
+  const producaoSemana = new Map<string, number>();
+  for (const line of weekProduction ?? []) {
+    producaoSemana.set(line.eap_item_id, (producaoSemana.get(line.eap_item_id) ?? 0) + Number(line.quantidade));
+  }
+  const producaoPorServico = (metrics?.porServico ?? [])
+    .filter((service) => producaoSemana.get(service.id))
+    .map((service) => ({
+      codigo: service.codigo,
+      descricao: service.descricao,
+      quantidadeNaSemana: producaoSemana.get(service.id),
+    }));
+
+  const contexto = {
+    hoje,
+    obra: {
+      codigo: work.codigo,
+      nome: work.nome,
+      status: work.status,
+      dataInicio: work.data_inicio,
+      dataFimPrevista: work.data_fim_prevista,
+      ...(canViewCosts ? { valorContratoR$: work.valor_contrato } : {}),
+    },
+    indicadores: canViewCosts ? {
+      avancoPct: metrics ? Math.round((metrics.valorAgregado / Math.max(metrics.orcado, 1)) * 100) : null,
+      planejadoPct: metrics ? Math.round(metrics.planejadoPct * 100) : null,
+      idcCustoXExecutado: metrics?.idc ?? null,
+      idpPrazo: metrics?.idp ?? null,
+      orcadoR$: metrics?.orcado ?? null,
+      custoRealR$: metrics?.custoReal ?? null,
+      valorAgregadoR$: metrics?.valorAgregado ?? null,
+      custoFinalPrevistoR$: metrics?.custoFinalPrevisto ?? null,
+    } : {
+      avancoPct: metrics ? Math.round((metrics.valorAgregado / Math.max(metrics.orcado, 1)) * 100) : null,
+      planejadoPct: metrics ? Math.round(metrics.planejadoPct * 100) : null,
+      idpPrazo: metrics?.idp ?? null,
+    },
+    servicos,
+    producaoConfirmadaNaSemana: producaoPorServico,
+    alertas: (indicators?.alertas ?? [])
+      .filter((alert) => Boolean(canViewCosts) || alert.id === "sem-rdo" || alert.id === "queda-producao"
+        || alert.id.startsWith("rascunho-") || alert.id.startsWith("producao-") || alert.id.startsWith("atraso-"))
+      .map((alert) => ({ severidade: alert.severidade, titulo: alert.titulo, detalhe: alert.detalhe })),
+    rdosNaSemana: (weekRdos ?? []).map((rdo) => ({ data: rdo.data, status: rdo.status })),
+  };
+
+  const { chatCompletion } = await import("@/lib/ai/chat");
+  const resposta = await chatCompletion(
+    `Você é o assistente do Obratrix, plataforma de gestão de obras para construtoras. ` +
+    `Responda em pt-BR, curto e direto (até ~6 linhas), usando SOMENTE o JSON de contexto. ` +
+    `Se a informação pedida não estiver no contexto, diga que o dado não está registrado no Obratrix. ` +
+    `Valores com "R$" estão em reais. Percentuais vão de 0 a 100. "PPC" é o percentual de itens do plano semanal cumpridos.`,
+    [{ role: "user", content: `Contexto da obra (JSON):\n${JSON.stringify(contexto)}\n\nPergunta: ${parsed.data.pergunta}` }],
+  );
+  if (!resposta) return { error: "A IA ainda não está configurada (defina AI_API_KEY) ou não respondeu. Tente novamente." };
+  return { resposta };
 }

@@ -15,6 +15,7 @@ import { getCompanyContext } from "@/lib/company";
 import { CurvaS } from "@/components/indicadores/curva-s";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/format";
 import { carregarIndicadoresObras } from "@/lib/indicadores/carregar";
+import { AskObraCard } from "@/components/obras/ask-obra-card";
 import { dataHoje, inicioDaSemana } from "@/lib/rdo/data";
 
 const statusLabels: Record<string, string> = {
@@ -225,6 +226,8 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
           </ul>
         </section>
       )}
+
+      <AskObraCard workId={work.id} />
 
       <section className="grid min-w-0 gap-4 lg:grid-cols-2">
         <article className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-5 sm:p-6">
