@@ -53,6 +53,15 @@ const eapRows = await sql<{ id: string }[]>`
   select id from public.obx_eap_itens where obra_id = ${workId} and tipo = 'servico' limit 1
 `;
 if (!eapRows[0]) throw new Error("O seed precisa criar serviços de EAP.");
+const serviceRows = await sql<{ id: string; codigo: string; centro_custo_id: string | null }[]>`
+  select id, codigo, centro_custo_id from public.obx_eap_itens
+  where obra_id = ${workId} and tipo = 'servico' order by codigo limit 1
+`;
+const otherWorkServices = await sql<{ id: string }[]>`
+  select id from public.obx_eap_itens
+  where obra_id = ${workRows[1]!.id} and tipo = 'servico' limit 1
+`;
+if (!serviceRows[0] || !otherWorkServices[0]) throw new Error("O seed precisa criar serviços nas duas obras.");
 const hasCostInsertGrant = await sql<{ allowed: boolean }[]>`
   select has_table_privilege('authenticated', 'public.obx_custos', 'INSERT') as allowed
 `;
@@ -95,6 +104,11 @@ try {
   await sql`
     insert into public.obx_empresa_membros (empresa_id, usuario_id, perfil)
     values (${temporaryCompanyId}, ${temporaryUserId}, 'diretor')
+  `;
+  const foreignCenter = await sql<{ id: string }[]>`
+    insert into public.obx_centros_custo (empresa_id, codigo, nome)
+    values (${temporaryCompanyId}, 'OUTRO', 'Centro externo')
+    returning id
   `;
   const temporaryRdo = await sql<{ id: string }[]>`
     insert into public.obx_rdos (obra_id, data, criado_por)
@@ -332,6 +346,17 @@ try {
   if (foremanWorks.length !== 1 || foremanWorks[0]!.id !== workId) {
     throw new Error("(b) encarregado não ficou restrito à única obra em que é membro.");
   }
+  const foremanCosts = await assertAsUser(foremanId, async (tx) => (
+    tx<{ total: number }[]>`
+      select count(*)::int as total
+      from public.obx_custos
+      where obra_id = ${workId}
+    `
+  ));
+  if (Number(foremanCosts[0]?.total) !== 0) {
+    throw new Error("Encarregado conseguiu ler custos da obra.");
+  }
+  console.log("PASS: encarregado não consegue ler custos.");
 
   let costInsertBlocked = false;
   try {
@@ -355,6 +380,116 @@ try {
   if (financeWorks.length !== workRows.length) {
     throw new Error("(c) financeiro não conseguiu ver todas as obras da empresa.");
   }
+  const financeCostInsert = await assertAsUser(financeId, async (tx) => {
+    await tx`savepoint obx_test_cost_insert`;
+    const inserted = await tx<{ id: string; centro_custo_id: string | null }[]>`
+      insert into public.obx_custos (obra_id, eap_item_id, categoria, descricao, data, valor, criado_por)
+      values (${workId}, ${serviceRows[0]!.id}, 'material', 'Teste de inserção RLS', current_date, 1, ${financeId})
+      returning id, centro_custo_id
+    `;
+    await tx`rollback to savepoint obx_test_cost_insert`;
+    return inserted;
+  });
+  if (financeCostInsert.length !== 1 || financeCostInsert[0]!.centro_custo_id !== serviceRows[0]!.centro_custo_id) {
+    throw new Error("Financeiro não conseguiu inserir custo ou o centro do serviço não foi herdado.");
+  }
+  console.log("PASS: financeiro insere custo e herda centro de custo do serviço.");
+
+  let crossWorkServiceBlocked = false;
+  try {
+    await assertAsUser(financeId, async (tx) => (
+      tx`
+        insert into public.obx_custos (
+          obra_id, eap_item_id, categoria, descricao, data, valor, criado_por
+        )
+        values (
+          ${workId}, ${otherWorkServices[0]!.id}, 'material',
+          'Serviço de outra obra', current_date, 1, ${financeId}
+        )
+      `
+    ));
+  } catch (error) {
+    crossWorkServiceBlocked = (error as { code?: string }).code === "23514";
+  }
+  if (!crossWorkServiceBlocked) throw new Error("Custo aceitou serviço EAP de outra obra.");
+  console.log("PASS: custo rejeita serviço EAP de outra obra.");
+
+  let foreignCenterBlocked = false;
+  try {
+    await assertAsUser(financeId, async (tx) => (
+      tx`
+        insert into public.obx_custos (
+          obra_id, centro_custo_id, categoria, descricao, data, valor, criado_por
+        )
+        values (
+          ${workId}, ${foreignCenter[0]!.id}, 'material',
+          'Centro de outra empresa', current_date, 1, ${financeId}
+        )
+      `
+    ));
+  } catch (error) {
+    foreignCenterBlocked = (error as { code?: string }).code === "23514";
+  }
+  if (!foreignCenterBlocked) throw new Error("Custo aceitou centro de custo de outra empresa.");
+  console.log("PASS: custo rejeita centro de custo de outra empresa.");
+
+  const todayInCompany = await sql<{ data: string }[]>`
+    select (now() at time zone ${companies[0]!.fuso_horario})::date::text as data
+  `;
+  const invalidImportDescription = `Importação atômica ${randomUUID()}`;
+  const invalidImportItems = [
+    {
+      data: todayInCompany[0]!.data,
+      descricao: invalidImportDescription,
+      categoria: "material",
+      valor: 1,
+      codigo_eap: serviceRows[0]!.codigo,
+    },
+    {
+      data: todayInCompany[0]!.data,
+      descricao: `${invalidImportDescription} inválida`,
+      categoria: "material",
+      valor: 0,
+    },
+  ];
+  let invalidImportBlocked = false;
+  try {
+    await assertAsUser(financeId, async (tx) => (
+      tx`select public.obx_fn_importar_custos(${workId}, ${sql.json(invalidImportItems)}::jsonb)`
+    ));
+  } catch (error) {
+    invalidImportBlocked = (error as { code?: string }).code === "22023";
+  }
+  const persistedInvalidImport = await sql<{ total: number }[]>`
+    select count(*)::int as total from public.obx_custos
+    where obra_id = ${workId} and descricao like ${`${invalidImportDescription}%`}
+  `;
+  if (!invalidImportBlocked || Number(persistedInvalidImport[0]?.total) !== 0) {
+    throw new Error("Importação inválida não foi atômica.");
+  }
+  console.log("PASS: importação com item inválido não persiste nenhum custo.");
+
+  const futureCostDate = await sql<{ data: string }[]>`
+    select ((now() at time zone ${companies[0]!.fuso_horario})::date + 1)::text as data
+  `;
+  let futureCostBlocked = false;
+  try {
+    await assertAsUser(financeId, async (tx) => (
+      tx`select public.obx_fn_importar_custos(
+        ${workId},
+        ${sql.json([{
+          data: futureCostDate[0]!.data,
+          descricao: "Custo futuro",
+          categoria: "material",
+          valor: 1,
+        }])}::jsonb
+      )`
+    ));
+  } catch (error) {
+    futureCostBlocked = (error as { code?: string }).code === "22023";
+  }
+  if (!futureCostBlocked) throw new Error("Importação aceitou custo em data futura.");
+  console.log("PASS: importação rejeita data futura no fuso da empresa.");
 
   const financeEapUpdate = await assertAsUser(financeId, async (tx) => (
     tx<{ id: string }[]>`

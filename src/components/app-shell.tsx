@@ -22,10 +22,6 @@ const navigation = [
   { href: "/app/obras", label: "Obras", icon: BriefcaseBusiness },
 ];
 
-const futureItems = [
-  { label: "Custos", icon: Wallet },
-];
-
 export function AppShell({
   children,
   company,
@@ -68,12 +64,10 @@ export function AppShell({
             <ClipboardList size={18} />
             RDO
           </Link>
-          {futureItems.map(({ label, icon: Icon }) => (
-            <div key={label} className="flex items-center justify-between rounded-xl px-3 py-3 text-sm text-slate-400">
-              <span className="flex items-center gap-3"><Icon size={18} />{label}</span>
-              <span className="text-[9px] font-semibold uppercase tracking-wide">Em breve</span>
-            </div>
-          ))}
+          <Link href="/app/obras?secao=custos" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-emerald-800">
+            <Wallet size={18} />
+            Custos
+          </Link>
           <Link href="/app/membros" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-emerald-800">
             <UsersRound size={18} />
             Membros

@@ -18,7 +18,12 @@ const statusClass: Record<string, string> = {
   concluida: "bg-slate-100 text-slate-600",
 };
 
-export default async function WorksPage() {
+export default async function WorksPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ secao?: string }>;
+}) {
+  const { secao } = await searchParams;
   const { supabase, company, perfil } = await getCompanyContext();
   const { data: works, error } = await supabase
     .from("obx_obras")
@@ -55,7 +60,7 @@ export default async function WorksPage() {
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {works.map((work) => (
             <article key={work.id} className="group rounded-2xl border border-slate-200/70 bg-white p-5 shadow-[0_2px_10px_rgba(20,44,32,0.02)] transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md sm:p-6">
-              <Link href={`/app/obras/${work.id}`} className="block">
+              <Link href={secao === "custos" ? `/app/obras/${work.id}/custos` : `/app/obras/${work.id}`} className="block">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-start gap-3.5">
                   <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-800">
@@ -82,7 +87,7 @@ export default async function WorksPage() {
                 </div>
                 <div className="col-span-2 flex items-center justify-between">
                   <p className="truncate text-xs text-slate-500">{[work.cidade, work.uf].filter(Boolean).join(" · ") || "Local não informado"}</p>
-                  <span className="flex items-center gap-1 text-xs font-semibold text-emerald-800 group-hover:gap-2">Ver detalhes <ArrowRight size={14} /></span>
+                  <span className="flex items-center gap-1 text-xs font-semibold text-emerald-800 group-hover:gap-2">{secao === "custos" ? "Ver custos" : "Ver detalhes"} <ArrowRight size={14} /></span>
                 </div>
               </div>
               </Link>

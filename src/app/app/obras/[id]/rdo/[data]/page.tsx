@@ -24,6 +24,7 @@ export default async function RdoDetailPage({
     .eq("empresa_id", company.id)
     .maybeSingle();
   if (!work) notFound();
+  const { data: canViewCosts } = await supabase.rpc("obx_fn_pode_ver_custo", { p_obra_id: work.id });
 
   const { data: rdo } = await supabase
     .from("obx_rdos")
@@ -143,7 +144,7 @@ export default async function RdoDetailPage({
 
   return (
     <div className="space-y-6">
-      <WorkTabs workId={work.id} active="rdo" />
+      <WorkTabs workId={work.id} active="rdo" showCosts={Boolean(canViewCosts)} />
       <Link href={`/app/obras/${work.id}/rdo`} className="inline-flex items-center gap-2 text-xs font-semibold text-slate-500 hover:text-emerald-800">
         <ArrowLeft size={15} /> Lista de RDOs
       </Link>

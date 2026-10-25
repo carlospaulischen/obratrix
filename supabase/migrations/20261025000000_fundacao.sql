@@ -393,6 +393,22 @@ as $$
   or public.obx_fn_pode_editar_obra(p_obra_id)
 $$;
 
+create function public.obx_fn_pode_ver_custo(p_obra_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(
+    public.obx_fn_pode_ver_obra(p_obra_id)
+    and public.obx_fn_perfil_na_empresa((
+      select o.empresa_id from public.obx_obras as o where o.id = p_obra_id
+    )) <> 'encarregado',
+    false
+  )
+$$;
+
 create function public.obx_fn_pode_editar_rdo(p_rdo_id uuid)
 returns boolean
 language sql
@@ -710,7 +726,7 @@ create policy obx_fotos_delete on public.obx_fotos for delete to authenticated
 using (public.obx_fn_pode_registrar_campo(obra_id));
 
 create policy obx_custos_select on public.obx_custos for select to authenticated
-using (public.obx_fn_pode_ver_obra(obra_id));
+using (public.obx_fn_pode_ver_custo(obra_id));
 create policy obx_custos_insert on public.obx_custos for insert to authenticated
 with check (public.obx_fn_pode_editar_custo(obra_id) and criado_por = auth.uid());
 create policy obx_custos_update on public.obx_custos for update to authenticated
@@ -747,6 +763,7 @@ grant execute on function public.obx_fn_pode_ver_obra(uuid) to authenticated;
 grant execute on function public.obx_fn_pode_editar_obra(uuid) to authenticated;
 grant execute on function public.obx_fn_pode_registrar_campo(uuid) to authenticated;
 grant execute on function public.obx_fn_pode_editar_custo(uuid) to authenticated;
+grant execute on function public.obx_fn_pode_ver_custo(uuid) to authenticated;
 grant execute on function public.obx_fn_pode_editar_rdo(uuid) to authenticated;
 grant execute on function public.obx_fn_criar_empresa(text, text) to authenticated;
 
@@ -795,11 +812,12 @@ select
   case
     when o.data_inicio is null or o.data_fim_prevista is null or o.data_fim_prevista <= o.data_inicio then 0
     else least(1, greatest(0,
-      (current_date - o.data_inicio)::numeric
+      (((now() at time zone e.fuso_horario)::date - o.data_inicio)::numeric)
       / nullif((o.data_fim_prevista - o.data_inicio)::numeric, 0)
     )) * 100
   end::numeric(7,2) as avanco_planejado_pct
 from public.obx_obras as o
+join public.obx_empresas as e on e.id = o.empresa_id
 left join orcamento as orc on orc.obra_id = o.id
 left join realizado as real on real.obra_id = o.id
 left join executado as exec on exec.obra_id = o.id;

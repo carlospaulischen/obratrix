@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { avaliarAlertas } from "../src/lib/indicadores/alertas";
+import { calcularIndicadores } from "../src/lib/indicadores/calcular";
+import { dataHoje } from "../src/lib/rdo/data";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -300,7 +303,7 @@ async function upsertEap(obraId: string, stages: StageSpec[], centerIds: Map<str
 
   const services = await supabase
     .from("obx_eap_itens")
-    .select("id,codigo,descricao,quantidade,custo_unitario")
+    .select("id,codigo,descricao,quantidade,custo_unitario,centro_custo_id")
     .eq("obra_id", obraId)
     .eq("tipo", "servico")
     .order("ordem");
@@ -310,7 +313,7 @@ async function upsertEap(obraId: string, stages: StageSpec[], centerIds: Map<str
 
 async function seedRdos(
   obraId: string,
-  services: { id: string; codigo: string; descricao: string; quantidade: number; custo_unitario: number }[],
+  services: { id: string; codigo: string; descricao: string; quantidade: number; custo_unitario: number; centro_custo_id: string | null }[],
   userIds: Map<string, string>,
   centerIds: Map<string, string>,
   workIndex: number,
@@ -326,10 +329,10 @@ async function seedRdos(
     clima_manha: index % 9 === 0 ? "nublado" : "bom",
     clima_tarde: index % 13 === 0 ? "chuva_fraca" : "bom",
     observacoes: index % 7 === 0 ? "Conferência de materiais e alinhamento da equipe." : "Atividades conforme programação da frente.",
-    status: index === dates.length - 1 ? "rascunho" : "confirmado",
+    status: index >= dates.length - 2 || (workIndex === 1 && index === 0) ? "rascunho" : "confirmado",
     criado_por: foremanId,
-    confirmado_por: index === dates.length - 1 ? null : directorId,
-    confirmado_em: index === dates.length - 1 ? null : `${data}T17:30:00-03:00`,
+    confirmado_por: index >= dates.length - 2 || (workIndex === 1 && index === 0) ? null : directorId,
+    confirmado_em: index >= dates.length - 2 || (workIndex === 1 && index === 0) ? null : `${data}T17:30:00-03:00`,
   }));
   const rdoResult = await supabase
     .from("obx_rdos")
@@ -348,22 +351,17 @@ async function seedRdos(
   const manpowerResult = await supabase.from("obx_rdo_mao_obra").upsert(manpowerRows);
   requireSuccess(manpowerResult.error);
 
-  const productionRows = dates.map((data, index) => {
-    const service = services[Math.min(Math.floor(index / 2), services.length - 1)]!;
-    const isMasonry = service.descricao.toLocaleLowerCase("pt-BR").includes("alvenaria");
-    const dailyQuantity = isMasonry
-      ? service.quantidade * 0.009
-      : service.quantidade * 0.025;
-    return {
-      id: uuidFor(`obratrix:producao:${obraId}:${data}`),
-      rdo_id: rdoIds.get(data),
-      eap_item_id: service.id,
-      quantidade: Number(dailyQuantity.toFixed(4)),
-      observacao: isMasonry
-        ? "Produção abaixo da referência, com equipe de 4 profissionais e 5 ajudantes."
-        : "Produção registrada pela equipe de campo.",
-    };
-  });
+  const targetProgress = workIndex === 0 ? 0.4 : 0.28;
+  const productionRows = dates.flatMap((data) => services.map((service) => ({
+    id: uuidFor(`obratrix:producao:${obraId}:${data}:${service.id}`),
+    rdo_id: rdoIds.get(data),
+    eap_item_id: service.id,
+    quantidade: Number((service.quantidade * targetProgress / dates.length).toFixed(4)),
+    observacao: "Produção registrada pela equipe de campo.",
+  })));
+  const cleanupProduction = await supabase.from("obx_rdo_producao").delete()
+    .in("rdo_id", [...rdoIds.values()]);
+  requireSuccess(cleanupProduction.error);
   const productionResult = await supabase.from("obx_rdo_producao").upsert(productionRows);
   requireSuccess(productionResult.error);
 
@@ -408,17 +406,27 @@ async function seedRdos(
   requireSuccess(equipmentResult.error);
 
   const budget = services.reduce((total, service) => total + service.quantidade * service.custo_unitario, 0);
-  const expenseRatio = workIndex === 0 ? 0.43 : 0.2;
+  const expenseRatio = workIndex === 0 ? 0.43 : 0.28;
   const expenseCount = 30;
-  const costCenters = ["FND", "VED", "EST", "ADM", "ADM"] as const;
+  const largestService = services.reduce((largest, item) =>
+    item.quantidade * item.custo_unitario > largest.quantidade * largest.custo_unitario ? item : largest,
+  );
+  const budgetTotal = budget * expenseRatio;
+  const overrunAmount = workIndex === 0
+    ? largestService.quantidade * largestService.custo_unitario * 1.2
+    : 0;
   const expenseRows = Array.from({ length: expenseCount }, (_, index) => {
-    const amount = index === expenseCount - 1
-      ? budget * expenseRatio - (budget * expenseRatio / expenseCount) * (expenseCount - 1)
-      : budget * expenseRatio / expenseCount;
+    const amount = index === 0
+      ? Math.max(overrunAmount, budgetTotal / expenseCount)
+      : (budgetTotal - Math.max(overrunAmount, budgetTotal / expenseCount)) / (expenseCount - 1);
     const category = (["material", "mao_obra", "servico_terceiro", "equipamento", "indireto"] as const)[index % 5]!;
+    const service = index === 0
+      ? largestService
+      : category === "indireto" ? null : services[(index - 1) % services.length]!;
     return {
       id: uuidFor(`obratrix:custo:${obraId}:${index}`),
       obra_id: obraId,
+      eap_item_id: service?.id ?? null,
       categoria: category,
       descricao: [
         "Compra de aço e material básico",
@@ -429,10 +437,10 @@ async function seedRdos(
       ][index % 5],
       fornecedor: ["Aço Brasil", "Materiais Central", "Concretos Vale", "LocaObra", "Serviços Integrados"][index % 5],
       documento: `NF-${workIndex + 1}-${String(index + 1).padStart(4, "0")}`,
-      data: dates[index],
+      data: dates[index % dates.length],
       valor: Number(amount.toFixed(2)),
       criado_por: userIds.get("financeiro@obratrix.demo")!,
-      centro_custo_id: centerIds.get(costCenters[index % costCenters.length]!) ?? null,
+      centro_custo_id: service ? null : centerIds.get("ADM") ?? null,
     };
   });
   const costResult = await supabase.from("obx_custos").upsert(expenseRows);
@@ -515,7 +523,7 @@ async function main() {
     },
   ];
   const workIds: string[] = [];
-  const eapByWork: { id: string; codigo: string; descricao: string; quantidade: number; custo_unitario: number }[][] = [];
+  const eapByWork: { id: string; codigo: string; descricao: string; quantidade: number; custo_unitario: number; centro_custo_id: string | null }[][] = [];
 
   for (const work of workSpecs) {
     const { data, error } = await supabase
@@ -565,6 +573,66 @@ async function main() {
     + `${eapByWork.reduce((sum, entries) => sum + entries.length, 0)} serviços EAP e `
     + `${rdoCount} registros diários de produção.`,
   );
+
+  const { data: seededRdos, error: rdosError } = await supabase
+    .from("obx_rdos").select("id,obra_id,data,status").in("obra_id", workIds);
+  requireSuccess(rdosError);
+  const seededRdoIds = (seededRdos ?? []).map((rdo) => rdo.id);
+  const [{ data: seededCosts, error: costsError }, { data: seededServices, error: servicesError }, { data: seededCenters, error: centersError }] = await Promise.all([
+    supabase.from("obx_custos").select("obra_id,data,valor,eap_item_id,centro_custo_id").in("obra_id", workIds),
+    supabase.from("obx_eap_itens").select("id,obra_id,codigo,descricao,quantidade,custo_unitario,custo_total,centro_custo_id").eq("tipo", "servico").in("obra_id", workIds),
+    supabase.from("obx_centros_custo").select("id,nome").eq("empresa_id", companyId),
+  ]);
+  const seededProduction: { rdo_id: string; eap_item_id: string; quantidade: number }[] = [];
+  for (let start = 0; ; start += 1000) {
+    const { data, error } = await supabase.from("obx_rdo_producao")
+      .select("id,rdo_id,eap_item_id,quantidade").in("rdo_id", seededRdoIds)
+      .order("id").range(start, start + 999);
+    requireSuccess(error);
+    seededProduction.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  requireSuccess(costsError);
+  requireSuccess(servicesError);
+  requireSuccess(centersError);
+  const rdoById = new Map((seededRdos ?? []).map((rdo) => [rdo.id, rdo]));
+  for (let index = 0; index < workIds.length; index += 1) {
+    const obraId = workIds[index]!;
+    const spec = workSpecs[index]!;
+    const obraRdos = (seededRdos ?? []).filter((rdo) => rdo.obra_id === obraId);
+    const productions = (seededProduction ?? []).flatMap((row) => {
+      const rdo = rdoById.get(row.rdo_id);
+      return rdo?.obra_id === obraId
+        ? [{ eap_item_id: row.eap_item_id, quantidade: Number(row.quantidade), data: rdo.data, rdo_status: rdo.status }]
+        : [];
+    });
+    const metrics = calcularIndicadores({
+      obraId,
+      dataInicio: spec.data_inicio,
+      dataFimPrevista: spec.data_fim_prevista,
+      servicos: (seededServices ?? []).filter((item) => item.obra_id === obraId),
+      producoes: productions,
+      custos: (seededCosts ?? []).filter((item) => item.obra_id === obraId).map((item) => ({ ...item, valor: Number(item.valor) })),
+      centros: seededCenters ?? [],
+    }, dataHoje(fusoHorario));
+    const weeklyEV = metrics.curvaS.map((point, pointIndex, weeks) => ({
+      semana: point.semana,
+      valor: point.valorAgregado - (weeks[pointIndex - 1]?.valorAgregado ?? 0),
+    }));
+    const alerts = avaliarAlertas({
+      ...metrics,
+      obraId,
+      status: spec.status,
+      rdos: obraRdos,
+      producaoAcima: metrics.porServico.filter((item) => item.quantidadeExecutada > item.quantidadeOrcada)
+        .map(({ id, codigo, quantidadeExecutada, quantidadeOrcada }) => ({ id, codigo, quantidadeExecutada, quantidadeOrcada })),
+      semanasEV: weeklyEV,
+    }, dataHoje(fusoHorario));
+    console.log(
+      `${spec.codigo}: IDC ${metrics.idc?.toFixed(2) ?? "—"} · IDP ${metrics.idp?.toFixed(2) ?? "—"} · `
+      + `EAC ${metrics.custoFinalPrevisto.toFixed(2)} · Alertas: ${alerts.map((item) => item.titulo).join("; ") || "nenhum"}`,
+    );
+  }
 }
 
 await main();

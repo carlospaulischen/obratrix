@@ -20,7 +20,7 @@ export default async function WorkBudgetPage({
     .maybeSingle();
   if (!work) notFound();
 
-  const [{ data: sourceItems }, { data: rdos }, { data: centers }, { data: canEdit }] =
+  const [{ data: sourceItems }, { data: rdos }, { data: centers }, { data: canEdit }, { data: canViewCosts }] =
     await Promise.all([
       supabase
         .from("obx_eap_itens")
@@ -29,6 +29,7 @@ export default async function WorkBudgetPage({
       supabase.from("obx_rdos").select("id").eq("obra_id", id),
       supabase.from("obx_centros_custo").select("id,codigo,nome").eq("empresa_id", company.id).order("codigo"),
       supabase.rpc("obx_fn_pode_editar_obra", { p_obra_id: id }),
+      supabase.rpc("obx_fn_pode_ver_custo", { p_obra_id: id }),
     ]);
   const rdoIds = (rdos ?? []).map((rdo) => rdo.id);
   const { data: production } = rdoIds.length
@@ -47,7 +48,7 @@ export default async function WorkBudgetPage({
 
   return (
     <div className="space-y-7">
-      <WorkTabs workId={work.id} active="orcamento" />
+      <WorkTabs workId={work.id} active="orcamento" showCosts={Boolean(canViewCosts)} />
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
           <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-emerald-700">{work.codigo} · Orçamento/EAP</p>

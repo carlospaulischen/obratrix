@@ -456,6 +456,9 @@ isOneToOne: false
             "obx_fn_criar_empresa":
 { Args: { "p_cnpj"?: string,"p_nome": string }; Returns: string
                            },
+"obx_fn_importar_custos":
+{ Args: { "p_itens": Json,"p_obra_id": string }; Returns: Json
+                           },
 "obx_fn_importar_eap":
 { Args: { "p_itens": Json,"p_modo": string,"p_obra_id": string }; Returns: Json
                            },
@@ -472,6 +475,9 @@ isOneToOne: false
 { Args: { "p_rdo_id": string }; Returns: boolean
                            },
 "obx_fn_pode_registrar_campo":
+{ Args: { "p_obra_id": string }; Returns: boolean
+                           },
+"obx_fn_pode_ver_custo":
 { Args: { "p_obra_id": string }; Returns: boolean
                            },
 "obx_fn_pode_ver_obra":

@@ -17,9 +17,10 @@ export default async function WorkRdoListPage({ params }: { params: Promise<{ id
     .eq("empresa_id", company.id)
     .maybeSingle();
   if (!work) notFound();
-  const { data: canRegister } = await supabase.rpc("obx_fn_pode_registrar_campo", {
-    p_obra_id: work.id,
-  });
+  const [{ data: canRegister }, { data: canViewCosts }] = await Promise.all([
+    supabase.rpc("obx_fn_pode_registrar_campo", { p_obra_id: work.id }),
+    supabase.rpc("obx_fn_pode_ver_custo", { p_obra_id: work.id }),
+  ]);
 
   const { data: rdos } = await supabase
     .from("obx_rdos")
@@ -44,7 +45,7 @@ export default async function WorkRdoListPage({ params }: { params: Promise<{ id
 
   return (
     <div className="space-y-6">
-      <WorkTabs workId={work.id} active="rdo" />
+      <WorkTabs workId={work.id} active="rdo" showCosts={Boolean(canViewCosts)} />
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-bold uppercase tracking-widest text-emerald-700">{work.codigo} · Diário de obra</p>

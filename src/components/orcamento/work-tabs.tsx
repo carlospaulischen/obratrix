@@ -3,15 +3,18 @@ import Link from "next/link";
 export function WorkTabs({
   workId,
   active,
+  showCosts = false,
 }: {
   workId: string;
-  active: "resumo" | "orcamento" | "rdo";
+  active: "resumo" | "orcamento" | "rdo" | "custos";
+  showCosts?: boolean;
 }) {
   const tabs = [
     { href: `/app/obras/${workId}`, label: "Resumo", id: "resumo" },
     { href: `/app/obras/${workId}/orcamento`, label: "Orçamento/EAP", id: "orcamento" },
     { href: `/app/obras/${workId}/rdo`, label: "RDO", id: "rdo" },
-  ] as const;
+    ...(showCosts ? [{ href: `/app/obras/${workId}/custos`, label: "Custos", id: "custos" as const }] : []),
+  ];
 
   return (
     <nav aria-label="Seções da obra" className="flex gap-6 border-b border-slate-200">
