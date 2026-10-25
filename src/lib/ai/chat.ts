@@ -17,7 +17,7 @@ export async function chatCompletion(
   const apiKey = process.env.AI_API_KEY;
   if (!apiKey) return null;
   const baseUrl = (process.env.AI_BASE_URL || "https://openrouter.ai/api/v1").replace(/\/$/, "");
-  const model = process.env.AI_MODEL || "meta-llama/llama-3.3-70b-instruct:free";
+  const model = process.env.AI_MODEL || "nvidia/nemotron-3-ultra-550b-a55b:free";
 
   try {
     const controller = new AbortController();
