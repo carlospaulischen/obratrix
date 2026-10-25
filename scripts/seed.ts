@@ -430,6 +430,19 @@ async function seedRdos(
   requireSuccess(manpowerResult.error);
 
   const windows = criarJanelasServicos(stages, services, dataInicio, dataFimPrevista);
+  const janelaUpdates = await Promise.all(
+    services.map((service) => {
+      const window = windows.get(service.id)!;
+      return supabase
+        .from("obx_eap_itens")
+        .update({
+          inicio_previsto: dateAtDay(Math.ceil(window.inicio)),
+          fim_previsto: dateAtDay(Math.ceil(window.fim) - 1),
+        })
+        .eq("id", service.id);
+    }),
+  );
+  for (const update of janelaUpdates) requireSuccess(update.error);
   const activeOn = (date: string) => services.filter((service) => {
     const window = windows.get(service.id)!;
     const day = dayNumber(date);
@@ -467,7 +480,11 @@ async function seedRdos(
   for (const service of services) {
     const window = windows.get(service.id)!;
     const dailyQuantity = service.quantidade / window.diasUteis * productionScale;
-    let remaining = Math.min(service.quantidade, (baseProduction.get(service.id) ?? 0) * productionScale);
+    const atrasado = workIndex === 1
+      && window.fim < dayNumber(today)
+      && fractionFor(`obratrix:servico-atrasado:${service.id}`) < 0.2;
+    const cap = atrasado ? 0.7 + fractionFor(`obratrix:servico-atrasado-cap:${service.id}`) * 0.15 : 1;
+    let remaining = Math.min(service.quantidade * cap, (baseProduction.get(service.id) ?? 0) * productionScale);
     for (const data of confirmedDates) {
       const day = dayNumber(data);
       if (day < window.inicio || day >= window.fim || remaining <= 0 || !activeOn(data).some((item) => item.id === service.id)) continue;
@@ -603,6 +620,11 @@ async function seedRdos(
   requireSuccess(costResult.error);
 
   const activeServiceCounts = confirmedDates.map((date) => activeOn(date).length);
+
+  const planoResult = await seedPlanosSemanais(
+    obraId, services, windows, productionRows, rdoIds, userIds, workIndex, today,
+  );
+
   return {
     rdoCount: dates.length,
     productionCount: productionRows.length,
@@ -612,7 +634,80 @@ async function seedRdos(
     activeServiceMin: Math.min(...activeServiceCounts),
     activeServiceMax: Math.max(...activeServiceCounts),
     activeServiceAvg: activeServiceCounts.reduce((sum, count) => sum + count, 0) / activeServiceCounts.length,
+    planoCount: planoResult.planoCount,
+    planoItemCount: planoResult.planoItemCount,
   };
+}
+
+async function seedPlanosSemanais(
+  obraId: string,
+  services: { id: string; codigo: string; quantidade: number; custo_unitario: number }[],
+  windows: Map<string, ServiceWindow>,
+  productionRows: { rdo_id?: string | null; eap_item_id: string; quantidade: number }[],
+  rdoIds: Map<string, string>,
+  userIds: Map<string, string>,
+  workIndex: number,
+  today: string,
+) {
+  const dataByRdoId = new Map([...rdoIds].map(([data, id]) => [id, data]));
+  const currentMonday = dayNumber(today) - ((new Date(`${today}T12:00:00.000Z`).getUTCDay() + 6) % 7);
+  const semanas: number[] = [];
+  for (let offset = 6; offset >= 0; offset -= 1) semanas.push(currentMonday - offset * 7);
+
+  const missRatio = workIndex === 0 ? 0.12 : 0.3;
+  const planoRows: { id: string; obra_id: string; semana_inicio: string; status: string; criado_por: string }[] = [];
+  const itemRows: { id: string; plano_id: string; eap_item_id: string; quantidade_planejada: number }[] = [];
+
+  for (const semanaDay of semanas) {
+    const semanaInicio = dateAtDay(semanaDay);
+    const semanaFim = dateAtDay(semanaDay + 6);
+    const planoId = uuidFor(`obratrix:plano:${obraId}:${semanaInicio}`);
+    const fechado = semanaFim < today;
+    planoRows.push({
+      id: planoId,
+      obra_id: obraId,
+      semana_inicio: semanaInicio,
+      status: fechado ? "fechado" : "aberto",
+      criado_por: userIds.get("engenheiro@obratrix.demo")!,
+    });
+
+    for (const service of services) {
+      const window = windows.get(service.id)!;
+      if (window.fim <= semanaDay || window.inicio >= semanaDay + 7) continue;
+      const executado = productionRows
+        .filter((row) => {
+          const data = row.rdo_id ? dataByRdoId.get(row.rdo_id) : undefined;
+          return row.eap_item_id === service.id && data !== undefined && data >= semanaInicio && data <= semanaFim;
+        })
+        .reduce((sum, row) => sum + row.quantidade, 0);
+      const ritmo = service.quantidade / window.diasUteis;
+      const base = executado > 0 ? executado : ritmo * 5;
+      if (base <= 0) continue;
+      const erra = fractionFor(`obratrix:plano-miss:${obraId}:${semanaInicio}:${service.id}`) < missRatio;
+      const fator = erra ? 1.15 + fractionFor(`obratrix:plano-extra:${obraId}:${semanaInicio}:${service.id}`) * 0.2 : 0.97;
+      const quantidade = Number((base * fator).toFixed(2));
+      if (quantidade <= 0) continue;
+      itemRows.push({
+        id: uuidFor(`obratrix:plano-item:${obraId}:${semanaInicio}:${service.id}`),
+        plano_id: planoId,
+        eap_item_id: service.id,
+        quantidade_planejada: quantidade,
+      });
+    }
+  }
+
+  const cleanupItens = await supabase
+    .from("obx_plano_semanal_itens")
+    .delete()
+    .in("plano_id", planoRows.map((plano) => plano.id));
+  requireSuccess(cleanupItens.error);
+  const planosResult = await supabase
+    .from("obx_planos_semanais")
+    .upsert(planoRows, { onConflict: "obra_id,semana_inicio" });
+  requireSuccess(planosResult.error);
+  const itensResult = await supabase.from("obx_plano_semanal_itens").upsert(itemRows);
+  requireSuccess(itensResult.error);
+  return { planoCount: planoRows.length, planoItemCount: itemRows.length };
 }
 
 async function main() {
@@ -752,8 +847,10 @@ async function main() {
     `Seed concluído: ${people.length} usuários, ${workIds.length} obras, `
     + `${eapByWork.reduce((sum, entries) => sum + entries.length, 0)} serviços EAP e `
     + `${countsByWork.reduce((sum, result) => sum + result.rdoCount, 0)} RDOs, `
-    + `${countsByWork.reduce((sum, result) => sum + result.productionCount, 0)} produções e `
-    + `${countsByWork.reduce((sum, result) => sum + result.costCount, 0)} custos.`,
+    + `${countsByWork.reduce((sum, result) => sum + result.productionCount, 0)} produções, `
+    + `${countsByWork.reduce((sum, result) => sum + result.costCount, 0)} custos e `
+    + `${countsByWork.reduce((sum, result) => sum + result.planoItemCount, 0)} itens de plano semanal em `
+    + `${countsByWork.reduce((sum, result) => sum + result.planoCount, 0)} semanas.`,
   );
 
   const { data: seededRdos, error: rdosError } = await supabase
@@ -762,7 +859,7 @@ async function main() {
   const seededRdoIds = (seededRdos ?? []).map((rdo) => rdo.id);
   const [{ data: seededCosts, error: costsError }, { data: seededServices, error: servicesError }, { data: seededCenters, error: centersError }] = await Promise.all([
     supabase.from("obx_custos").select("obra_id,data,valor,eap_item_id,centro_custo_id").in("obra_id", workIds),
-    supabase.from("obx_eap_itens").select("id,obra_id,codigo,descricao,quantidade,custo_unitario,custo_total,centro_custo_id").eq("tipo", "servico").in("obra_id", workIds),
+    supabase.from("obx_eap_itens").select("id,obra_id,codigo,descricao,quantidade,custo_unitario,custo_total,centro_custo_id,inicio_previsto,fim_previsto").eq("tipo", "servico").in("obra_id", workIds),
     supabase.from("obx_centros_custo").select("id,nome").eq("empresa_id", companyId),
   ]);
   const seededProduction: { rdo_id: string; eap_item_id: string; quantidade: number }[] = [];

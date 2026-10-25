@@ -31,7 +31,7 @@ export async function carregarIndicadoresObras(
   const ids = works.map((work) => work.id);
   if (!ids.length) return [];
   const [services, rdos, costs, centers] = await Promise.all([
-    carregarTodasAsPaginas((inicio, fim) => supabase.from("obx_eap_itens").select("id,obra_id,codigo,descricao,quantidade,custo_unitario,custo_total,centro_custo_id").eq("tipo", "servico").in("obra_id", ids).order("id").range(inicio, fim)),
+    carregarTodasAsPaginas((inicio, fim) => supabase.from("obx_eap_itens").select("id,obra_id,codigo,descricao,quantidade,custo_unitario,custo_total,centro_custo_id,inicio_previsto,fim_previsto").eq("tipo", "servico").in("obra_id", ids).order("id").range(inicio, fim)),
     carregarTodasAsPaginas((inicio, fim) => supabase.from("obx_rdos").select("id,obra_id,data,status").in("obra_id", ids).order("id").range(inicio, fim)),
     carregarTodasAsPaginas((inicio, fim) => supabase.from("obx_custos").select("obra_id,data,valor,eap_item_id,centro_custo_id").in("obra_id", ids).order("id").range(inicio, fim)),
     carregarTodasAsPaginas((inicio, fim) => supabase.from("obx_centros_custo").select("id,nome").eq("empresa_id", centrosEmpresaId).order("id").range(inicio, fim)),

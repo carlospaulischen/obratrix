@@ -516,3 +516,108 @@ export async function deleteRdoPhotoAction(input: unknown): Promise<ActionState>
   revalidatePath(`/app/obras/${photo.obra_id}/rdo`);
   return { success: "Foto excluída." };
 }
+
+const cronogramaSchema = z.object({
+  obraId: z.string().uuid(),
+  itens: z.array(
+    z.object({
+      id: z.string().uuid(),
+      inicioPrevisto: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+      fimPrevisto: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+    }),
+  ).max(2000),
+});
+
+export async function saveCronogramaAction(input: unknown): Promise<ActionState> {
+  const parsed = cronogramaSchema.safeParse(input);
+  if (!parsed.success) return { error: "Confira as datas informadas." };
+
+  const { supabase, company } = await getCompanyContext();
+  const { data: canEdit } = await supabase.rpc("obx_fn_pode_editar_obra", {
+    p_obra_id: parsed.data.obraId,
+  });
+  if (!canEdit) return { error: "Você não tem permissão para editar o cronograma desta obra." };
+
+  const { data: work } = await supabase
+    .from("obx_obras")
+    .select("id")
+    .eq("id", parsed.data.obraId)
+    .eq("empresa_id", company.id)
+    .maybeSingle();
+  if (!work) return { error: "Obra não encontrada na empresa ativa." };
+
+  const { data: items } = await supabase
+    .from("obx_eap_itens")
+    .select("id")
+    .eq("obra_id", parsed.data.obraId)
+    .eq("tipo", "servico");
+  const validIds = new Set((items ?? []).map((item) => item.id));
+  if (parsed.data.itens.some((item) => !validIds.has(item.id))) {
+    return { error: "Há serviços que não pertencem a esta obra." };
+  }
+  for (const item of parsed.data.itens) {
+    if (item.inicioPrevisto && item.fimPrevisto && item.fimPrevisto < item.inicioPrevisto) {
+      return { error: "O fim previsto não pode ser anterior ao início." };
+    }
+  }
+
+  const results = await Promise.all(
+    parsed.data.itens.map((item) =>
+      supabase
+        .from("obx_eap_itens")
+        .update({ inicio_previsto: item.inicioPrevisto, fim_previsto: item.fimPrevisto })
+        .eq("id", item.id)
+        .eq("obra_id", parsed.data.obraId)
+    ),
+  );
+  if (results.some((result) => result.error)) {
+    return { error: "Não foi possível salvar o cronograma." };
+  }
+
+  revalidatePath(`/app/obras/${parsed.data.obraId}/cronograma`);
+  revalidatePath(`/app/obras/${parsed.data.obraId}`);
+  return { success: "Cronograma salvo." };
+}
+
+const planoSemanalSchema = z.object({
+  obraId: z.string().uuid(),
+  semanaInicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  itens: z.array(
+    z.object({
+      eapItemId: z.string().uuid(),
+      quantidadePlanejada: z.number().finite().positive(),
+    }),
+  ).max(500),
+});
+
+export async function savePlanoSemanalAction(input: unknown): Promise<ActionState> {
+  const parsed = planoSemanalSchema.safeParse(input);
+  if (!parsed.success) return { error: "Confira os itens do plano semanal." };
+
+  const { supabase, company } = await getCompanyContext();
+  const { data: work } = await supabase
+    .from("obx_obras")
+    .select("id")
+    .eq("id", parsed.data.obraId)
+    .eq("empresa_id", company.id)
+    .maybeSingle();
+  if (!work) return { error: "Obra não encontrada na empresa ativa." };
+
+  const monday = new Date(`${parsed.data.semanaInicio}T00:00:00.000Z`);
+  if (monday.getUTCDay() !== 1) return { error: "A semana deve começar numa segunda-feira." };
+
+  const { error } = await supabase.rpc("obx_fn_salvar_plano_semanal", {
+    p_obra_id: parsed.data.obraId,
+    p_semana_inicio: parsed.data.semanaInicio,
+    p_itens: parsed.data.itens.map((item) => ({
+      eap_item_id: item.eapItemId,
+      quantidade_planejada: item.quantidadePlanejada,
+    })),
+  });
+  if (error) {
+    return { error: error.message.includes("permissão") ? error.message : "Não foi possível salvar o plano semanal." };
+  }
+
+  revalidatePath(`/app/obras/${parsed.data.obraId}/semanal`);
+  return { success: "Plano semanal salvo." };
+}

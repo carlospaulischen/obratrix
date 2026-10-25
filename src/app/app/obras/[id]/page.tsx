@@ -84,6 +84,36 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
     .map((service) => ({ ...service, quantidade: quantitiesByService.get(service.id) ?? 0 }))
     .sort((a, b) => a.codigo.localeCompare(b.codigo, "pt-BR", { numeric: true }));
   const memberIds = (workMemberRows ?? []).map((entry) => entry.usuario_id);
+  const { data: ultimoPlano } = await supabase
+    .from("obx_planos_semanais")
+    .select("id,semana_inicio")
+    .eq("obra_id", id)
+    .lt("semana_inicio", weekStart)
+    .order("semana_inicio", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  let ppc: number | null = null;
+  if (ultimoPlano) {
+    const planoFim = new Date(`${ultimoPlano.semana_inicio}T00:00:00.000Z`);
+    planoFim.setUTCDate(planoFim.getUTCDate() + 6);
+    const fimPlano = planoFim.toISOString().slice(0, 10);
+    const [{ data: planoItens }, { data: rdosPlano }] = await Promise.all([
+      supabase.from("obx_plano_semanal_itens").select("eap_item_id,quantidade_planejada").eq("plano_id", ultimoPlano.id),
+      supabase.from("obx_rdos").select("id").eq("obra_id", id).eq("status", "confirmado").gte("data", ultimoPlano.semana_inicio).lte("data", fimPlano),
+    ]);
+    const planoRdoIds = (rdosPlano ?? []).map((rdo) => rdo.id);
+    const { data: producaoPlano } = planoRdoIds.length
+      ? await supabase.from("obx_rdo_producao").select("eap_item_id,quantidade").in("rdo_id", planoRdoIds)
+      : { data: [] };
+    const executadoPlano = new Map<string, number>();
+    for (const line of producaoPlano ?? []) {
+      executadoPlano.set(line.eap_item_id, (executadoPlano.get(line.eap_item_id) ?? 0) + Number(line.quantidade));
+    }
+    const itens = planoItens ?? [];
+    if (itens.length) {
+      ppc = itens.filter((item) => (executadoPlano.get(item.eap_item_id) ?? 0) >= Number(item.quantidade_planejada)).length / itens.length;
+    }
+  }
   const [{ data: workProfiles }, { data: companyMemberships }] = await Promise.all([
     memberIds.length
       ? supabase.from("obx_usuarios").select("id,nome,email").in("id", memberIds)
@@ -107,7 +137,7 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
   const metrics = indicators?.indicadores;
   const visibleAlerts = (indicators?.alertas ?? []).filter((alert) =>
     Boolean(canViewCosts) || alert.id === "sem-rdo" || alert.id === "queda-producao"
-      || alert.id.startsWith("rascunho-") || alert.id.startsWith("producao-")
+      || alert.id.startsWith("rascunho-") || alert.id.startsWith("producao-") || alert.id.startsWith("atraso-")
   );
 
   return (
@@ -144,7 +174,10 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
       </section>
 
       <section className={`grid gap-4 ${canViewCosts ? "md:grid-cols-3" : "md:grid-cols-1"}`}>
-        <SummaryCard label="Avanço físico × planejado" value={`${formatNumber(progress, company.locale, { maximumFractionDigits: 1 })}% × ${formatNumber((metrics?.planejadoPct ?? 0) * 100, company.locale, { maximumFractionDigits: 1 })}%`} detail="produção confirmada versus cronograma linear" percent={progress} accent="emerald" />
+        <SummaryCard label="Avanço físico × planejado" value={`${formatNumber(progress, company.locale, { maximumFractionDigits: 1 })}% × ${formatNumber((metrics?.planejadoPct ?? 0) * 100, company.locale, { maximumFractionDigits: 1 })}%`} detail={metrics?.temCronogramaServicos ? "produção confirmada versus planejado por serviço" : "produção confirmada versus cronograma linear"} percent={progress} accent="emerald" />
+        {ppc !== null && ultimoPlano && (
+          <SummaryCard label={`PPC · semana de ${formatDate(ultimoPlano.semana_inicio, company.locale)}`} value={`${formatNumber(ppc * 100, company.locale, { maximumFractionDigits: 0 })}%`} detail="itens planejados cumpridos na semana" percent={ppc * 100} accent={ppc >= 0.8 ? "emerald" : ppc >= 0.5 ? "amber" : "rose"} />
+        )}
         {canViewCosts && metrics && <>
           <SummaryCard label="IDC · custo / valor executado" value={formatNumber(metrics.idc, company.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} detail="maior que 1 indica eficiência de custo" />
           <SummaryCard label="IDP · avanço / planejado" value={formatNumber(metrics.idp, company.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} detail="maior que 1 indica avanço adiantado" />
@@ -282,7 +315,11 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
 
       <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-xs text-blue-900">
         <CalendarDays size={16} className="shrink-0" />
-        O cronograma exibido é uma referência linear entre as datas da obra. O cronograma detalhado por EAP será disponibilizado em breve.
+        {metrics?.temCronogramaServicos ? (
+          <>O planejado usa a janela de cada serviço — veja a aba <Link href={`/app/obras/${work.id}/cronograma`} className="font-semibold underline">Cronograma</Link> e o <Link href={`/app/obras/${work.id}/semanal`} className="font-semibold underline">planejamento semanal</Link>.</>
+        ) : (
+          <>O cronograma exibido é uma referência linear entre as datas da obra. Defina a janela de cada serviço na aba <Link href={`/app/obras/${work.id}/cronograma`} className="font-semibold underline">Cronograma</Link>.</>
+        )}
       </div>
     </div>
   );

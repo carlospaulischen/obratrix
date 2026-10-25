@@ -46,6 +46,67 @@ describe("indicadores", () => {
   });
 });
 
+describe("cronograma por serviço", () => {
+  const comJanela: DadosIndicadores = {
+    ...base,
+    dataInicio: "2026-10-01",
+    dataFimPrevista: "2026-10-31",
+    producoes: [],
+    custos: [],
+    servicos: [
+      { id: "s1", codigo: "1.1", descricao: "A", quantidade: 10, custo_unitario: 10, inicio_previsto: "2026-10-01", fim_previsto: "2026-10-15" },
+      { id: "s2", codigo: "1.2", descricao: "B", quantidade: 10, custo_unitario: 20, inicio_previsto: "2026-10-16", fim_previsto: "2026-10-31" },
+    ],
+  };
+
+  it("calcula o PV somando a janela de cada serviço", () => {
+    const result = calcularIndicadores(comJanela, "2026-10-15");
+    // s1: 100% de 100 (janela 01-15 inclui o dia 15 como decorrido parcial: (15-1)/14≈1 clamp)
+    // s2: ainda não começou → 0 de 200
+    expect(result.temCronogramaServicos).toBe(true);
+    expect(result.valorPlanejado).toBe(100);
+    expect(result.planejadoPct).toBeCloseTo(100 / 300, 5);
+  });
+
+  it("interpola dentro da janela do serviço", () => {
+    const result = calcularIndicadores(comJanela, "2026-10-08");
+    // s1: (8-1)/14 = 0,5 → 50 de 100; s2: 0
+    expect(result.valorPlanejado).toBeCloseTo(50, 5);
+  });
+
+  it("usa a linha reta da obra para serviços sem janela", () => {
+    const result = calcularIndicadores({
+      ...comJanela,
+      servicos: [
+        { id: "s1", codigo: "1.1", descricao: "A", quantidade: 10, custo_unitario: 10, inicio_previsto: "2026-10-01", fim_previsto: "2026-10-15" },
+        { id: "s2", codigo: "1.2", descricao: "B", quantidade: 10, custo_unitario: 20 },
+      ],
+    }, "2026-10-15");
+    // s1: 100 → 100; s2: linear obra (15-1)/30 ≈ 0,4667 → 200*0,4667 ≈ 93,33
+    expect(result.valorPlanejado).toBeCloseTo(100 + 200 * (14 / 30), 4);
+  });
+
+  it("marca serviço atrasado quando a janela venceu sem execução completa", () => {
+    const result = calcularIndicadores({ ...comJanela, producoes: [{ eap_item_id: "s1", quantidade: 5, data: "2026-10-10", rdo_status: "confirmado" }] }, "2026-10-31");
+    expect(result.servicosAtrasados).toHaveLength(1);
+    expect(result.servicosAtrasados[0]).toMatchObject({ id: "s1", fimPrevisto: "2026-10-15", executadoPct: 0.5 });
+  });
+
+  it("não marca serviço completo como atrasado", () => {
+    const result = calcularIndicadores({ ...comJanela, producoes: [{ eap_item_id: "s1", quantidade: 10, data: "2026-10-10", rdo_status: "confirmado" }] }, "2026-10-31");
+    expect(result.servicosAtrasados).toHaveLength(0);
+  });
+
+  it("a Curva S reflete o PV por janela de serviço", () => {
+    const result = calcularIndicadores(comJanela, "2026-10-31");
+    const mid = result.curvaS.find((week) => week.semana === "2026-10-12")!;
+    const last = result.curvaS.at(-1)!;
+    expect(mid.valorPlanejado).toBeGreaterThan(0);
+    expect(mid.valorPlanejado).toBeLessThan(300);
+    expect(last.valorPlanejado).toBe(300);
+  });
+});
+
 describe("alertas por regra", () => {
   it("classifica IDC e IDP nos níveis de atenção e crítico", () => {
     const result = calcularIndicadores(base, "2026-10-15");
@@ -102,6 +163,20 @@ describe("alertas por regra", () => {
       producaoAcima: [{ id: "s1", codigo: "1.1", quantidadeExecutada: 12, quantidadeOrcada: 10 }],
     }, "2026-10-31");
     expect(alerts.find((item) => item.id === "producao-s1")?.severidade).toBe("atencao");
+  });
+
+  it("alerta para serviço vencido com execução abaixo do orçado", () => {
+    const result = calcularIndicadores({
+      ...base,
+      servicos: [{ ...base.servicos[0]!, inicio_previsto: "2026-10-01", fim_previsto: "2026-10-15" }],
+      producoes: [{ ...base.producoes[0]!, quantidade: 5 }],
+    }, "2026-10-31");
+    const alerts = avaliarAlertas({ ...result, obraId: "obra-1", status: "em_andamento", rdos: [] }, "2026-10-31");
+    const alert = alerts.find((item) => item.id === "atraso-s1");
+    expect(alert?.severidade).toBe("atencao");
+    expect(alert?.detalhe).toContain("15/10/2026");
+    expect(alert?.detalhe).toContain("50% executado");
+    expect(alert?.link).toBe("/app/obras/obra-1/cronograma");
   });
 
   it("considera apenas dias úteis ao alertar pela falta de RDO", () => {

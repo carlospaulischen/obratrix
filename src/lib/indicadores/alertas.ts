@@ -57,6 +57,10 @@ export function avaliarAlertas(
   for (const service of dados.porServico.filter((item) => item.custoReal > item.orcado).sort((a, b) => (b.custoReal - b.orcado) - (a.custoReal - a.orcado)).slice(0, regras.alertasServico)) {
     add(`custo-servico-${service.id}`, "critico", "Custo real acima do orçamento do serviço", `${service.codigo} · desvio de ${formatCurrency(service.custoReal - service.orcado, formato.locale, formato.moeda)}.`, "orcamento");
   }
+  for (const service of dados.servicosAtrasados.slice(0, regras.alertasServico)) {
+    const [ano, mes, dia] = service.fimPrevisto.split("-");
+    add(`atraso-${service.id}`, "atencao", "Serviço atrasado no cronograma", `${service.codigo} · fim previsto ${dia}/${mes}/${ano}, ${formatNumber(service.executadoPct * 100, formato.locale, { maximumFractionDigits: 0 })}% executado.`, "cronograma");
+  }
   for (const service of dados.producaoAcima ?? []) {
     add(`producao-${service.id}`, "atencao", "Produção acima da quantidade orçada", `${service.codigo} · ${formatNumber(service.quantidadeExecutada, formato.locale)} de ${formatNumber(service.quantidadeOrcada, formato.locale)}.`, "orcamento");
   }

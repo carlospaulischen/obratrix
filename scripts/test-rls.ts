@@ -598,6 +598,101 @@ try {
   }
   console.log("PASS: auditoria só pode ser lida pela diretoria; INSERT direto está revogado.");
 
+  const foremanPlanos = await assertAsUser(foremanId, async (tx) => (
+    tx<{ id: string }[]>`select id from public.obx_planos_semanais where obra_id = ${workId} limit 1`
+  ));
+  if (!foremanPlanos.length) throw new Error("Encarregado membro não consegue ler plano semanal.");
+  console.log("PASS: encarregado membro lê plano semanal da obra.");
+
+  let foremanPlanoBlocked = false;
+  try {
+    await assertAsUser(foremanId, async (tx) => (
+      tx`
+        select public.obx_fn_salvar_plano_semanal(
+          ${workId}, (date_trunc('week', current_date)::date + 371),
+          ${sql.json([{ eap_item_id: serviceRows[0]!.id, quantidade_planejada: 1 }])}::jsonb
+        )
+      `
+    ));
+  } catch (error) {
+    foremanPlanoBlocked = (error as { code?: string }).code === "42501";
+  }
+  if (!foremanPlanoBlocked) throw new Error("Encarregado conseguiu salvar plano semanal pela RPC.");
+  console.log("PASS: RPC de plano semanal nega encarregado.");
+
+  let foremanPlanoInsertBlocked = false;
+  try {
+    await assertAsUser(foremanId, async (tx) => (
+      tx`
+        insert into public.obx_planos_semanais (obra_id, semana_inicio)
+        values (${workId}, (date_trunc('week', current_date)::date + 378))
+      `
+    ));
+  } catch (error) {
+    foremanPlanoInsertBlocked = isRlsDenied(error);
+  }
+  if (!foremanPlanoInsertBlocked) throw new Error("Encarregado inseriu plano semanal diretamente.");
+  console.log("PASS: insert direto de plano semanal é negado pelo RLS para encarregado.");
+
+  const engineerPlano = await assertAsUser(engineerId, async (tx) => (
+    tx<{ obx_fn_salvar_plano_semanal: string }[]>`
+      select public.obx_fn_salvar_plano_semanal(
+        ${workId}, (date_trunc('week', current_date)::date + 371),
+        ${sql.json([{ eap_item_id: serviceRows[0]!.id, quantidade_planejada: 1 }])}::jsonb
+      ) as obx_fn_salvar_plano_semanal
+    `
+  ));
+  const engineerPlanoId = engineerPlano[0]?.obx_fn_salvar_plano_semanal;
+  if (!engineerPlanoId) throw new Error("Engenheiro membro não conseguiu salvar plano semanal.");
+  console.log("PASS: engenheiro membro salva plano semanal pela RPC.");
+
+  let foreignServiceBlocked = false;
+  try {
+    await assertAsUser(engineerId, async (tx) => (
+      tx`
+        select public.obx_fn_salvar_plano_semanal(
+          ${workId}, (date_trunc('week', current_date)::date + 371),
+          ${sql.json([{ eap_item_id: otherWorkServices[0]!.id, quantidade_planejada: 1 }])}::jsonb
+        )
+      `
+    ));
+  } catch (error) {
+    foreignServiceBlocked = (error as { code?: string }).code === "23514";
+  }
+  if (!foreignServiceBlocked) throw new Error("Plano semanal aceitou serviço de outra obra.");
+  console.log("PASS: plano semanal rejeita serviço de outra obra.");
+
+  const foreignPlanos = await assertAsUser(temporaryUserId, async (tx) => (
+    tx<{ id: string }[]>`select id from public.obx_planos_semanais where obra_id = ${workId}`
+  ));
+  if (foreignPlanos.length !== 0) throw new Error("Usuário de outra empresa leu plano semanal.");
+  console.log("PASS: plano semanal invisível para outra empresa.");
+
+  const foremanDatesUpdate = await assertAsUser(foremanId, async (tx) => (
+    tx`
+      update public.obx_eap_itens
+      set inicio_previsto = current_date
+      where id = ${serviceRows[0]!.id}
+    `
+  ));
+  if (foremanDatesUpdate.count !== 0) throw new Error("Encarregado alterou datas do cronograma.");
+  console.log("PASS: encarregado não edita datas do cronograma (RLS).");
+
+  const directorDatesUpdate = await assertAsUser(directorId, async (tx) => {
+    await tx`savepoint obx_test_datas`;
+    const updated = await tx`
+      update public.obx_eap_itens
+      set inicio_previsto = current_date, fim_previsto = current_date + 7
+      where id = ${serviceRows[0]!.id}
+    `;
+    await tx`rollback to savepoint obx_test_datas`;
+    return updated;
+  });
+  if (directorDatesUpdate.count !== 1) throw new Error("Diretor não conseguiu editar datas do cronograma.");
+  console.log("PASS: diretor edita datas do cronograma.");
+
+  await sql`delete from public.obx_planos_semanais where id = ${engineerPlanoId}`;
+
   const profile = await sql<{ id: string; email: string }[]>`
     select id, email from public.obx_usuarios where id = ${temporaryUserId}
   `;

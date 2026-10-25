@@ -6,6 +6,8 @@ export type ServicoIndicador = {
   custo_unitario: number;
   custo_total?: number | null;
   centro_custo_id?: string | null;
+  inicio_previsto?: string | null;
+  fim_previsto?: string | null;
 };
 
 export type ProducaoIndicador = {
@@ -38,6 +40,14 @@ export type Indicadores = {
   custoReal: number;
   planejadoPct: number;
   valorPlanejado: number;
+  temCronogramaServicos: boolean;
+  servicosAtrasados: {
+    id: string;
+    codigo: string;
+    descricao: string;
+    fimPrevisto: string;
+    executadoPct: number;
+  }[];
   idc: number | null;
   idp: number | null;
   custoFinalPrevisto: number;
@@ -101,16 +111,38 @@ export function calcularIndicadores(dados: DadosIndicadores, hoje: string): Indi
   const orcado = porServico.reduce((sum, service) => sum + service.orcado, 0);
   const valorAgregado = porServico.reduce((sum, service) => sum + service.valorAgregado, 0);
   const custoReal = dados.custos.reduce((sum, cost) => sum + Number(cost.valor), 0);
-  const hasDates = Boolean(dados.dataInicio && dados.dataFimPrevista);
-  let planejadoPct = 0;
-  if (hasDates) {
-    const start = dateFromIso(dados.dataInicio!);
-    const finish = dateFromIso(dados.dataFimPrevista!);
-    const current = dateFromIso(hoje);
+  const temCronogramaServicos = dados.servicos.some((service) => service.inicio_previsto && service.fim_previsto);
+  const fracaoDecorrida = (inicio: string | null | undefined, fim: string | null | undefined, referencia: string) => {
+    if (!inicio || !fim) return 0;
+    const start = dateFromIso(inicio);
+    const finish = dateFromIso(fim);
+    const ref = dateFromIso(referencia);
     const span = finish.getTime() - start.getTime();
-    planejadoPct = span <= 0 ? (current >= finish ? 1 : 0) : Math.min(1, Math.max(0, (current.getTime() - start.getTime()) / span));
-  }
-  const valorPlanejado = orcado * planejadoPct;
+    return span <= 0 ? (ref >= finish ? 1 : 0) : Math.min(1, Math.max(0, (ref.getTime() - start.getTime()) / span));
+  };
+  const pvServicoAte = (service: ServicoIndicador, referencia: string) => {
+    const serviceOrcado = Number(service.custo_total ?? Math.max(Number(service.quantidade), 0) * Number(service.custo_unitario));
+    if (service.inicio_previsto && service.fim_previsto) {
+      return serviceOrcado * fracaoDecorrida(service.inicio_previsto, service.fim_previsto, referencia);
+    }
+    return serviceOrcado * fracaoDecorrida(dados.dataInicio, dados.dataFimPrevista, referencia);
+  };
+  const valorPlanejado = dados.servicos.reduce((sum, service) => sum + pvServicoAte(service, hoje), 0);
+  const planejadoPct = orcado > 0 ? Math.min(1, Math.max(0, valorPlanejado / orcado)) : 0;
+  const servicosAtrasados = porServico
+    .map((service) => {
+      const source = dados.servicos.find((entry) => entry.id === service.id);
+      return { ...service, fimPrevisto: source?.fim_previsto ?? null };
+    })
+    .filter((service) => service.fimPrevisto !== null && service.fimPrevisto < hoje && service.quantidadeExecutada < service.quantidadeOrcada)
+    .map((service) => ({
+      id: service.id,
+      codigo: service.codigo,
+      descricao: service.descricao,
+      fimPrevisto: service.fimPrevisto!,
+      executadoPct: service.quantidadeOrcada > 0 ? service.quantidadeExecutada / service.quantidadeOrcada : 0,
+    }))
+    .sort((a, b) => a.executadoPct - b.executadoPct);
   const idc = custoReal > 0 ? valorAgregado / custoReal : null;
   const idp = valorPlanejado > 0 ? valorAgregado / valorPlanejado : null;
   const custoFinalPrevisto = idc !== null && idc > 0
@@ -156,18 +188,14 @@ export function calcularIndicadores(dados: DadosIndicadores, hoje: string): Indi
       const endDate = new Date(week);
       endDate.setUTCDate(endDate.getUTCDate() + 6);
       const end = isoFromDate(endDate) > hoje ? hoje : isoFromDate(endDate);
-      const plannedPct = hasDates
-        ? (dateFromIso(dados.dataFimPrevista!) <= dateFromIso(dados.dataInicio!)
-          ? (dateFromIso(end) >= dateFromIso(dados.dataFimPrevista!) ? 1 : 0)
-          : Math.min(1, Math.max(0, (dateFromIso(end).getTime() - dateFromIso(dados.dataInicio!).getTime()) / (dateFromIso(dados.dataFimPrevista!).getTime() - dateFromIso(dados.dataInicio!).getTime()))))
-        : 0;
+      const pvSemana = dados.servicos.reduce((total, service) => total + pvServicoAte(service, end), 0);
       const ev = [...productionByService].reduce((total, [serviceId, rows]) => {
         const quantity = rows.filter((row) => row.data <= end).reduce((sum, row) => sum + row.quantidade, 0);
         const service = porServico.find((item) => item.id === serviceId);
         return total + Math.min(quantity, service?.quantidadeOrcada ?? 0) * (unitCosts.get(serviceId) ?? 0);
       }, 0);
       const ac = dados.custos.filter((cost) => cost.data <= end).reduce((sum, cost) => sum + Number(cost.valor), 0);
-      curvaS.push({ semana: start, valorPlanejado: orcado * plannedPct, valorAgregado: ev, custoReal: ac });
+      curvaS.push({ semana: start, valorPlanejado: pvSemana, valorAgregado: ev, custoReal: ac });
     }
   }
   return {
@@ -176,6 +204,8 @@ export function calcularIndicadores(dados: DadosIndicadores, hoje: string): Indi
     custoReal,
     planejadoPct,
     valorPlanejado,
+    temCronogramaServicos,
+    servicosAtrasados,
     idc,
     idp,
     custoFinalPrevisto,

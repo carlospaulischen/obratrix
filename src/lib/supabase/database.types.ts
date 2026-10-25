@@ -103,14 +103,14 @@ isOneToOne: false
                   ]
                 },"obx_eap_itens": {
                   Row: {
-                    "centro_custo_id": string | null,"codigo": string,"created_at": string,"custo_total": number | null,"custo_unitario": number,"descricao": string,"id": string,"obra_id": string,"ordem": number,"parent_id": string | null,"quantidade": number,"tipo": Database["public"]['Enums']["obx_eap_tipo"],"unidade": string | null,"updated_at": string
+                    "centro_custo_id": string | null,"codigo": string,"created_at": string,"custo_total": number | null,"custo_unitario": number,"descricao": string,"fim_previsto": string | null,"id": string,"inicio_previsto": string | null,"obra_id": string,"ordem": number,"parent_id": string | null,"quantidade": number,"tipo": Database["public"]['Enums']["obx_eap_tipo"],"unidade": string | null,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "centro_custo_id"?: string | null,"codigo": string,"created_at"?: string,"custo_total"?: never,"custo_unitario"?: number,"descricao": string,"id"?: string,"obra_id": string,"ordem"?: number,"parent_id"?: string | null,"quantidade"?: number,"tipo": Database["public"]['Enums']["obx_eap_tipo"],"unidade"?: string | null,"updated_at"?: string
+                    "centro_custo_id"?: string | null,"codigo": string,"created_at"?: string,"custo_total"?: never,"custo_unitario"?: number,"descricao": string,"fim_previsto"?: string | null,"id"?: string,"inicio_previsto"?: string | null,"obra_id": string,"ordem"?: number,"parent_id"?: string | null,"quantidade"?: number,"tipo": Database["public"]['Enums']["obx_eap_tipo"],"unidade"?: string | null,"updated_at"?: string
                   }
                   Update: {
-                    "centro_custo_id"?: string | null,"codigo"?: string,"created_at"?: string,"custo_total"?: never,"custo_unitario"?: number,"descricao"?: string,"id"?: string,"obra_id"?: string,"ordem"?: number,"parent_id"?: string | null,"quantidade"?: number,"tipo"?: Database["public"]['Enums']["obx_eap_tipo"],"unidade"?: string | null,"updated_at"?: string
+                    "centro_custo_id"?: string | null,"codigo"?: string,"created_at"?: string,"custo_total"?: never,"custo_unitario"?: number,"descricao"?: string,"fim_previsto"?: string | null,"id"?: string,"inicio_previsto"?: string | null,"obra_id"?: string,"ordem"?: number,"parent_id"?: string | null,"quantidade"?: number,"tipo"?: Database["public"]['Enums']["obx_eap_tipo"],"unidade"?: string | null,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -279,6 +279,64 @@ isOneToOne: false
 isOneToOne: false
       referencedRelation: "obx_usuarios"
       referencedColumns: ["id"]
+    }
+                  ]
+                },"obx_plano_semanal_itens": {
+                  Row: {
+                    "created_at": string,"eap_item_id": string,"id": string,"plano_id": string,"quantidade_planejada": number,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"eap_item_id": string,"id"?: string,"plano_id": string,"quantidade_planejada": number,"updated_at"?: string
+                  }
+                  Update: {
+                    "created_at"?: string,"eap_item_id"?: string,"id"?: string,"plano_id"?: string,"quantidade_planejada"?: number,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "obx_plano_semanal_itens_eap_item_id_fkey"
+      columns: ["eap_item_id"]
+isOneToOne: false
+      referencedRelation: "obx_eap_itens"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "obx_plano_semanal_itens_plano_id_fkey"
+      columns: ["plano_id"]
+isOneToOne: false
+      referencedRelation: "obx_planos_semanais"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"obx_planos_semanais": {
+                  Row: {
+                    "created_at": string,"criado_por": string | null,"id": string,"obra_id": string,"semana_inicio": string,"status": Database["public"]['Enums']["obx_plano_status"],"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"criado_por"?: string | null,"id"?: string,"obra_id": string,"semana_inicio": string,"status"?: Database["public"]['Enums']["obx_plano_status"],"updated_at"?: string
+                  }
+                  Update: {
+                    "created_at"?: string,"criado_por"?: string | null,"id"?: string,"obra_id"?: string,"semana_inicio"?: string,"status"?: Database["public"]['Enums']["obx_plano_status"],"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "obx_planos_semanais_criado_por_fkey"
+      columns: ["criado_por"]
+isOneToOne: false
+      referencedRelation: "obx_usuarios"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "obx_planos_semanais_obra_id_fkey"
+      columns: ["obra_id"]
+isOneToOne: false
+      referencedRelation: "obx_obras"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "obx_planos_semanais_obra_id_fkey"
+      columns: ["obra_id"]
+isOneToOne: false
+      referencedRelation: "obx_vw_obra_resumo"
+      referencedColumns: ["obra_id"]
     }
                   ]
                 },"obx_rdo_equipamentos": {
@@ -483,6 +541,9 @@ isOneToOne: false
 "obx_fn_pode_ver_obra":
 { Args: { "p_obra_id": string }; Returns: boolean
                            },
+"obx_fn_salvar_plano_semanal":
+{ Args: { "p_itens": Json,"p_obra_id": string,"p_semana_inicio": string }; Returns: string
+                           },
 "obx_fn_salvar_rdo":
 { Args: { "p_data": string,"p_obra_id": string,"p_payload": Json }; Returns: string
                            },
@@ -491,7 +552,7 @@ isOneToOne: false
                            }
           }
           Enums: {
-            "obx_clima": "bom"|"nublado"|"chuva_fraca"|"chuva_forte"|"impraticavel","obx_custo_categoria": "mao_obra"|"material"|"equipamento"|"servico_terceiro"|"indireto","obx_eap_tipo": "etapa"|"servico","obx_obra_status": "planejamento"|"em_andamento"|"paralisada"|"concluida","obx_perfil": "diretor"|"engenheiro"|"encarregado"|"financeiro","obx_rdo_status": "rascunho"|"confirmado"
+            "obx_clima": "bom"|"nublado"|"chuva_fraca"|"chuva_forte"|"impraticavel","obx_custo_categoria": "mao_obra"|"material"|"equipamento"|"servico_terceiro"|"indireto","obx_eap_tipo": "etapa"|"servico","obx_obra_status": "planejamento"|"em_andamento"|"paralisada"|"concluida","obx_perfil": "diretor"|"engenheiro"|"encarregado"|"financeiro","obx_plano_status": "aberto"|"fechado","obx_rdo_status": "rascunho"|"confirmado"
           }
           CompositeTypes: {
             [_ in never]: never
@@ -611,7 +672,7 @@ export const Constants = {
           }
         },"public": {
           Enums: {
-            "obx_clima": ["bom", "nublado", "chuva_fraca", "chuva_forte", "impraticavel"],"obx_custo_categoria": ["mao_obra", "material", "equipamento", "servico_terceiro", "indireto"],"obx_eap_tipo": ["etapa", "servico"],"obx_obra_status": ["planejamento", "em_andamento", "paralisada", "concluida"],"obx_perfil": ["diretor", "engenheiro", "encarregado", "financeiro"],"obx_rdo_status": ["rascunho", "confirmado"]
+            "obx_clima": ["bom", "nublado", "chuva_fraca", "chuva_forte", "impraticavel"],"obx_custo_categoria": ["mao_obra", "material", "equipamento", "servico_terceiro", "indireto"],"obx_eap_tipo": ["etapa", "servico"],"obx_obra_status": ["planejamento", "em_andamento", "paralisada", "concluida"],"obx_perfil": ["diretor", "engenheiro", "encarregado", "financeiro"],"obx_plano_status": ["aberto", "fechado"],"obx_rdo_status": ["rascunho", "confirmado"]
           }
         }
 } as const
