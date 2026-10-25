@@ -1,0 +1,36 @@
+# https://docs.devin.ai/onboard-devin/environment-yaml
+initialize:
+  - uses: github.com/actions/setup-node@v4
+    with:
+      node-version: "22"
+  - name: enable pnpm via corepack
+    run: |
+      corepack enable
+      corepack prepare pnpm@10.34.8 --activate
+maintenance: |
+  pnpm install
+knowledge:
+  - name: dev
+    contents: |
+      # pnpm dev (Next.js em localhost:3000). Node 22 exigido pelo package.json (engines >=22 <23).
+  - name: lint
+    contents: |
+      # pnpm lint && pnpm typecheck
+  - name: test
+    contents: |
+      # pnpm test (vitest)
+  - name: build
+    contents: |
+      # pnpm build (regenera next-env.d.ts; nao commitar next-env.d.ts)
+  - name: banco-local
+    contents: |
+      # pnpm db:start / db:stop / db:reset / db:push (Supabase local). Seed e testes RLS NAO leem
+      # .env.local: rodar com  set -a && . ./.env.local && set +a && pnpm db:seed
+      # (ou db:test-rls). pnpm db:check-prefix exige DATABASE_URL do mesmo .env.local.
+  - name: convencoes-obx
+    contents: |
+      # Todo objeto novo no banco (tabela, funcao, trigger, bucket) usa prefixo obx_; RLS em tudo;
+      # "hoje" = (now() at time zone e.fuso_horario)::date da empresa. Tipos: pnpm db:types.
+  - name: git
+    contents: |
+      # Branch de trabalho: develop, commits diretos.
