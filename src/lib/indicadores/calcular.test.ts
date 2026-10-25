@@ -54,6 +54,20 @@ describe("alertas por regra", () => {
     expect(alerts.find((item) => item.id === "idp")?.severidade).toBe("atencao");
   });
 
+  it("formata os detalhes financeiros dos alertas com a localidade e moeda da empresa", () => {
+    const result = calcularIndicadores({ ...base, custos: [{ ...base.custos[0]!, valor: 150 }] }, "2026-10-31");
+    const alerts = avaliarAlertas({
+      ...result,
+      obraId: "obra-1",
+      status: "planejamento",
+      rdos: [],
+    }, "2026-10-31", undefined, { locale: "pt-BR", moeda: "BRL" });
+
+    expect(alerts.find((item) => item.id === "idc")?.detalhe).toBe("IDC 0,67.");
+    expect(alerts.find((item) => item.id === "eac")?.detalhe).toBe("Custo final previsto 50% acima do orçamento.");
+    expect(alerts.find((item) => item.id === "custo-servico-s1")?.detalhe?.replace(/\u00a0/g, " ")).toContain("R$ 50,00");
+  });
+
   it("avisa quando o EAC passa de 105% e critica acima de 115% do BAC", () => {
     const attention = calcularIndicadores({ ...base, custos: [{ ...base.custos[0]!, valor: 108 }] }, "2026-10-31");
     const critical = calcularIndicadores({ ...base, custos: [{ ...base.custos[0]!, valor: 200 }] }, "2026-10-31");

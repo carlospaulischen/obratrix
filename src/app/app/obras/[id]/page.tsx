@@ -50,7 +50,7 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
     status: work.status,
     data_inicio: work.data_inicio,
     data_fim_prevista: work.data_fim_prevista,
-  }], today, company.id);
+  }], today, company.id, { locale: company.locale, moeda: company.moeda });
   const recentRdoIds = (recentRdos ?? []).map((rdo) => rdo.id);
   const weekRdoIds = (weekRdos ?? []).map((rdo) => rdo.id);
   const [{ data: recentLabor }, { data: recentOccurrences }, { data: weeklyProduction }] = await Promise.all([
@@ -95,7 +95,7 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
   const { data: companyProfiles } = companyMemberships?.length
     ? await supabase.from("obx_usuarios").select("id,nome,email").in("id", companyMemberships.map((entry) => entry.usuario_id))
     : { data: [] };
-  const profileById = new Map((companyProfiles ?? workProfiles ?? []).map((profile) => [profile.id, profile]));
+  const profileById = new Map((companyProfiles?.length ? companyProfiles : workProfiles ?? []).map((profile) => [profile.id, profile]));
   const workMemberSet = new Set(memberIds);
   const availableMembers = (companyMemberships ?? []).filter((member) => !workMemberSet.has(member.usuario_id));
 
@@ -146,8 +146,8 @@ export default async function WorkDetailPage({ params }: { params: Promise<{ id:
       <section className={`grid gap-4 ${canViewCosts ? "md:grid-cols-3" : "md:grid-cols-1"}`}>
         <SummaryCard label="Avanço físico × planejado" value={`${formatNumber(progress, company.locale, { maximumFractionDigits: 1 })}% × ${formatNumber((metrics?.planejadoPct ?? 0) * 100, company.locale, { maximumFractionDigits: 1 })}%`} detail="produção confirmada versus cronograma linear" percent={progress} accent="emerald" />
         {canViewCosts && metrics && <>
-          <SummaryCard label="IDC · custo / valor executado" value={metrics.idc?.toFixed(2) ?? "—"} detail="maior que 1 indica eficiência de custo" />
-          <SummaryCard label="IDP · avanço / planejado" value={metrics.idp?.toFixed(2) ?? "—"} detail="maior que 1 indica avanço adiantado" />
+          <SummaryCard label="IDC · custo / valor executado" value={formatNumber(metrics.idc, company.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} detail="maior que 1 indica eficiência de custo" />
+          <SummaryCard label="IDP · avanço / planejado" value={formatNumber(metrics.idp, company.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} detail="maior que 1 indica avanço adiantado" />
           <SummaryCard label="Custo real × valor agregado" value={`${formatCurrency(metrics.custoReal, company.locale, company.moeda)} × ${formatCurrency(metrics.valorAgregado, company.locale, company.moeda)}`} detail="AC × EV" accent="amber" />
           <SummaryCard label="Custo final previsto × orçamento" value={`${formatCurrency(metrics.custoFinalPrevisto, company.locale, company.moeda)} × ${formatCurrency(metrics.orcado, company.locale, company.moeda)}`} detail={`Desvio previsto ${formatCurrency(metrics.desvioPrevisto, company.locale, company.moeda)}`} accent={metrics.desvioPrevisto > 0 ? "rose" : "emerald"} />
         </>}

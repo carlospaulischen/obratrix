@@ -26,6 +26,7 @@ export async function carregarIndicadoresObras(
   }[],
   hoje: string,
   centrosEmpresaId: string,
+  formato: { locale: string; moeda: string },
 ) {
   const ids = works.map((work) => work.id);
   if (!ids.length) return [];
@@ -36,9 +37,12 @@ export async function carregarIndicadoresObras(
     carregarTodasAsPaginas((inicio, fim) => supabase.from("obx_centros_custo").select("id,nome").eq("empresa_id", centrosEmpresaId).order("id").range(inicio, fim)),
   ]);
   const rdoIds = (rdos ?? []).map((rdo) => rdo.id);
-  const production = rdoIds.length
-    ? await carregarTodasAsPaginas((inicio, fim) => supabase.from("obx_rdo_producao").select("id,rdo_id,eap_item_id,quantidade").in("rdo_id", rdoIds).order("id").range(inicio, fim))
-    : [];
+  const production = (await Promise.all(
+    Array.from({ length: Math.ceil(rdoIds.length / 50) }, (_, index) => {
+      const ids = rdoIds.slice(index * 50, (index + 1) * 50);
+      return carregarTodasAsPaginas((inicio, fim) => supabase.from("obx_rdo_producao").select("id,rdo_id,eap_item_id,quantidade").in("rdo_id", ids).order("id").range(inicio, fim));
+    }),
+  )).flat();
   const rdoById = new Map(rdos.map((rdo) => [rdo.id, rdo]));
   return works.map((work) => {
     const obraRdos = rdos.filter((rdo) => rdo.obra_id === work.id);
@@ -74,7 +78,7 @@ export async function carregarIndicadoresObras(
       rdos: obraRdos,
       producaoAcima,
       semanasEV: weeklyEV,
-    }, hoje);
+    }, hoje, undefined, formato);
     return { work, indicadores: indicators, alertas: alerts };
   });
 }

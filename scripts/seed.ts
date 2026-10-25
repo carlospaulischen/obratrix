@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { avaliarAlertas } from "../src/lib/indicadores/alertas";
 import { calcularIndicadores } from "../src/lib/indicadores/calcular";
+import { formatCurrency, formatNumber } from "../src/lib/format";
 import { dataHoje } from "../src/lib/rdo/data";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -204,6 +205,74 @@ function daysAgo(days: number, fusoHorario = "America/Sao_Paulo") {
   return date.toISOString().slice(0, 10);
 }
 
+function dayNumber(date: string) {
+  return Math.floor(new Date(`${date}T12:00:00.000Z`).getTime() / 86_400_000);
+}
+
+function dateAtDay(day: number) {
+  return new Date(day * 86_400_000 + 43_200_000).toISOString().slice(0, 10);
+}
+
+function workingDays(start: string, end: string) {
+  const days: string[] = [];
+  for (let day = dayNumber(start); day <= dayNumber(end); day += 1) {
+    const date = dateAtDay(day);
+    if (new Date(`${date}T12:00:00.000Z`).getUTCDay() !== 0) days.push(date);
+  }
+  return days;
+}
+
+function scaleStages(stages: StageSpec[], targetBudget: number): StageSpec[] {
+  const currentBudget = stages
+    .flatMap((stage) => stage.servicos)
+    .reduce((total, service) => total + service.quantidade * service.custoUnitario, 0);
+  const scale = targetBudget / currentBudget;
+  return stages.map((stage) => ({
+    ...stage,
+    servicos: stage.servicos.map((service) => ({
+      ...service,
+      custoUnitario: Number((service.custoUnitario * scale).toFixed(2)),
+    })),
+  }));
+}
+
+type ServiceWindow = { inicio: number; fim: number; diasUteis: number };
+
+function criarJanelasServicos(
+  stages: StageSpec[],
+  services: { id: string; codigo: string }[],
+  inicio: string,
+  fim: string,
+): Map<string, ServiceWindow> {
+  const startDay = dayNumber(inicio);
+  const duration = dayNumber(fim) - startDay + 1;
+  const stageOverlap = 0.3;
+  const stageSpan = duration / (stages.length - stageOverlap * (stages.length - 1));
+  const byCode = new Map(services.map((service) => [service.codigo, service.id]));
+  const calendarDays = workingDays(inicio, fim);
+  const windows = new Map<string, ServiceWindow>();
+
+  stages.forEach((stage, stageIndex) => {
+    const stageStart = startDay + stageIndex * stageSpan * (1 - stageOverlap);
+    const serviceOverlap = 0.85;
+    const serviceSpan = stageSpan / (stage.servicos.length - serviceOverlap * (stage.servicos.length - 1));
+    stage.servicos.forEach((spec, serviceIndex) => {
+      const serviceId = byCode.get(spec.codigo);
+      if (!serviceId) throw new Error(`Serviço ${spec.codigo} não foi carregado após o seed da EAP.`);
+      const inicioJanela = stageStart + serviceIndex * serviceSpan * (1 - serviceOverlap);
+      const fimJanela = Math.min(startDay + duration, inicioJanela + serviceSpan);
+      const diasUteis = calendarDays.filter((date) => dayNumber(date) >= inicioJanela && dayNumber(date) < fimJanela).length;
+      if (!diasUteis) throw new Error(`A janela do serviço ${spec.codigo} não contém dias úteis.`);
+      windows.set(serviceId, { inicio: inicioJanela, fim: fimJanela, diasUteis });
+    });
+  });
+  return windows;
+}
+
+function fractionFor(key: string) {
+  return createHash("sha256").update(key).digest().readUInt32BE(0) / 0xffffffff;
+}
+
 async function getUsers() {
   const { data, error } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
   if (error) throw error;
@@ -314,6 +383,9 @@ async function upsertEap(obraId: string, stages: StageSpec[], centerIds: Map<str
 async function seedRdos(
   obraId: string,
   services: { id: string; codigo: string; descricao: string; quantidade: number; custo_unitario: number; centro_custo_id: string | null }[],
+  stages: StageSpec[],
+  dataInicio: string,
+  dataFimPrevista: string,
   userIds: Map<string, string>,
   centerIds: Map<string, string>,
   workIndex: number,
@@ -321,7 +393,13 @@ async function seedRdos(
 ) {
   const foremanId = userIds.get("encarregado@obratrix.demo")!;
   const directorId = userIds.get("diretor@obratrix.demo")!;
-  const dates = Array.from({ length: 30 }, (_, index) => daysAgo(30 - index, fusoHorario));
+  const today = dataHoje(fusoHorario);
+  const dates = workingDays(dataInicio, daysAgo(1, fusoHorario));
+  const oldDraftDate = workIndex === 1
+    ? dates.filter((date) => date <= daysAgo(10, fusoHorario)).at(-1)
+    : undefined;
+  const draftDates = new Set(workIndex === 0 ? dates.slice(-2) : oldDraftDate ? [oldDraftDate] : []);
+  const statusByDate = new Map(dates.map((date) => [date, draftDates.has(date) ? "rascunho" as const : "confirmado" as const]));
   const rdoRows = dates.map((data, index) => ({
     id: uuidFor(`obratrix:rdo:${obraId}:${data}`),
     obra_id: obraId,
@@ -329,10 +407,10 @@ async function seedRdos(
     clima_manha: index % 9 === 0 ? "nublado" : "bom",
     clima_tarde: index % 13 === 0 ? "chuva_fraca" : "bom",
     observacoes: index % 7 === 0 ? "Conferência de materiais e alinhamento da equipe." : "Atividades conforme programação da frente.",
-    status: index >= dates.length - 2 || (workIndex === 1 && index === 0) ? "rascunho" : "confirmado",
+    status: statusByDate.get(data),
     criado_por: foremanId,
-    confirmado_por: index >= dates.length - 2 || (workIndex === 1 && index === 0) ? null : directorId,
-    confirmado_em: index >= dates.length - 2 || (workIndex === 1 && index === 0) ? null : `${data}T17:30:00-03:00`,
+    confirmado_por: statusByDate.get(data) === "confirmado" ? directorId : null,
+    confirmado_em: statusByDate.get(data) === "confirmado" ? `${data}T17:30:00-03:00` : null,
   }));
   const rdoResult = await supabase
     .from("obx_rdos")
@@ -351,19 +429,72 @@ async function seedRdos(
   const manpowerResult = await supabase.from("obx_rdo_mao_obra").upsert(manpowerRows);
   requireSuccess(manpowerResult.error);
 
-  const targetProgress = workIndex === 0 ? 0.4 : 0.28;
-  const productionRows = dates.flatMap((data) => services.map((service) => ({
-    id: uuidFor(`obratrix:producao:${obraId}:${data}:${service.id}`),
-    rdo_id: rdoIds.get(data),
-    eap_item_id: service.id,
-    quantidade: Number((service.quantidade * targetProgress / dates.length).toFixed(4)),
-    observacao: "Produção registrada pela equipe de campo.",
-  })));
+  const windows = criarJanelasServicos(stages, services, dataInicio, dataFimPrevista);
+  const activeOn = (date: string) => services.filter((service) => {
+    const window = windows.get(service.id)!;
+    const day = dayNumber(date);
+    return day >= window.inicio && day < window.fim;
+  }).slice(0, 8);
+  const confirmedDates = dates.filter((date) => statusByDate.get(date) === "confirmado");
+  const baseProduction = new Map(services.map((service) => {
+    const window = windows.get(service.id)!;
+    const activeDates = confirmedDates.filter((date) => {
+      const day = dayNumber(date);
+      return day >= window.inicio && day < window.fim;
+    }).length;
+    return [service.id, activeDates * service.quantidade / window.diasUteis];
+  }));
+  const budget = services.reduce((total, service) => total + service.quantidade * service.custo_unitario, 0);
+  const planSpan = dayNumber(dataFimPrevista) - dayNumber(dataInicio);
+  const plannedPct = planSpan > 0
+    ? Math.max(0, Math.min(1, (dayNumber(today) - dayNumber(dataInicio)) / planSpan))
+    : 1;
+  const targetIdp = workIndex === 0 ? 1 : 0.75;
+  const targetEV = budget * plannedPct * targetIdp;
+  const evAtScale = (scale: number) => services.reduce((total, service) =>
+    total + Math.min(service.quantidade, (baseProduction.get(service.id) ?? 0) * scale) * service.custo_unitario,
+  0);
+  let low = 0;
+  let high = 1;
+  while (evAtScale(high) < targetEV && high < 1024) high *= 2;
+  for (let iteration = 0; iteration < 60; iteration += 1) {
+    const middle = (low + high) / 2;
+    if (evAtScale(middle) < targetEV) low = middle;
+    else high = middle;
+  }
+  const productionScale = (low + high) / 2;
+  const productionRows = [];
+  for (const service of services) {
+    const window = windows.get(service.id)!;
+    const dailyQuantity = service.quantidade / window.diasUteis * productionScale;
+    let remaining = Math.min(service.quantidade, (baseProduction.get(service.id) ?? 0) * productionScale);
+    for (const data of confirmedDates) {
+      const day = dayNumber(data);
+      if (day < window.inicio || day >= window.fim || remaining <= 0 || !activeOn(data).some((item) => item.id === service.id)) continue;
+      const quantidade = Number(Math.min(remaining, dailyQuantity).toFixed(4));
+      if (quantidade <= 0) continue;
+      productionRows.push({
+        id: uuidFor(`obratrix:producao:${obraId}:${data}:${service.id}`),
+        rdo_id: rdoIds.get(data),
+        eap_item_id: service.id,
+        quantidade,
+        observacao: "Produção registrada pela equipe de campo.",
+      });
+      remaining = Math.max(0, remaining - quantidade);
+    }
+  }
   const cleanupProduction = await supabase.from("obx_rdo_producao").delete()
     .in("rdo_id", [...rdoIds.values()]);
   requireSuccess(cleanupProduction.error);
   const productionResult = await supabase.from("obx_rdo_producao").upsert(productionRows);
   requireSuccess(productionResult.error);
+  const executedByService = new Map<string, number>();
+  for (const row of productionRows) {
+    executedByService.set(row.eap_item_id, (executedByService.get(row.eap_item_id) ?? 0) + row.quantidade);
+  }
+  const valorAgregado = services.reduce((total, service) =>
+    total + Math.min(service.quantidade, executedByService.get(service.id) ?? 0) * service.custo_unitario,
+  0);
 
   const occurrenceRows = dates
     .filter((_, index) => index % 6 === 0)
@@ -405,40 +536,65 @@ async function seedRdos(
   const equipmentResult = await supabase.from("obx_rdo_equipamentos").upsert(equipmentRows);
   requireSuccess(equipmentResult.error);
 
-  const budget = services.reduce((total, service) => total + service.quantidade * service.custo_unitario, 0);
-  const expenseRatio = workIndex === 0 ? 0.43 : 0.28;
-  const expenseCount = 30;
-  const largestService = services.reduce((largest, item) =>
-    item.quantidade * item.custo_unitario > largest.quantidade * largest.custo_unitario ? item : largest,
-  );
-  const budgetTotal = budget * expenseRatio;
-  const overrunAmount = workIndex === 0
-    ? largestService.quantidade * largestService.custo_unitario * 1.2
-    : 0;
-  const expenseRows = Array.from({ length: expenseCount }, (_, index) => {
-    const amount = index === 0
-      ? Math.max(overrunAmount, budgetTotal / expenseCount)
-      : (budgetTotal - Math.max(overrunAmount, budgetTotal / expenseCount)) / (expenseCount - 1);
-    const category = (["material", "mao_obra", "servico_terceiro", "equipamento", "indireto"] as const)[index % 5]!;
-    const service = index === 0
-      ? largestService
-      : category === "indireto" ? null : services[(index - 1) % services.length]!;
+  const targetIdc = workIndex === 0 ? 0.9 : 1;
+  const costTarget = valorAgregado / targetIdc;
+  const categories = ["material", "mao_obra", "servico_terceiro", "equipamento", "indireto"] as const;
+  const expenseWeights = dates.filter((_, index) => index % 2 === 0).map((data, index) => ({
+    data,
+    index,
+    category: categories[index % categories.length]!,
+    weight: 0.6 + fractionFor(`obratrix:custo-variacao:${obraId}:${data}`) * 0.8,
+  }));
+  const weightTotal = expenseWeights.reduce((total, row) => total + row.weight, 0);
+  const targetCents = Math.round(costTarget * 100);
+  let assignedCents = 0;
+  const expenseValues = expenseWeights.map((row, index) => {
+    const cents = index === expenseWeights.length - 1
+      ? targetCents - assignedCents
+      : Math.round(targetCents * row.weight / weightTotal);
+    assignedCents += cents;
+    return cents / 100;
+  });
+  const overrunCandidate = workIndex === 0
+    ? services.map((service) => {
+      const potential = expenseWeights.reduce((total, row, index) => {
+        return row.category !== "indireto" && activeOn(row.data).some((item) => item.id === service.id)
+          ? total + expenseValues[index]!
+          : total;
+      }, 0);
+      const orcado = service.quantidade * service.custo_unitario;
+      return { service, potential, ratio: potential / orcado };
+    }).sort((a, b) => b.ratio - a.ratio)[0]
+    : undefined;
+  const expenseRows = expenseWeights.map((row, index) => {
+    const availableServices = activeOn(row.data);
+    if (row.category !== "indireto" && !availableServices.length) {
+      throw new Error(`Nenhum serviço ativo na data de custo ${row.data} (${obraId}).`);
+    }
+    const service = row.category === "indireto"
+      ? null
+      : overrunCandidate && availableServices.some((item) => item.id === overrunCandidate.service.id)
+        ? overrunCandidate.service
+        : availableServices[Math.min(
+          availableServices.length - 1,
+          Math.floor(fractionFor(`obratrix:custo-servico:${obraId}:${row.data}`) * availableServices.length),
+        )]!;
     return {
-      id: uuidFor(`obratrix:custo:${obraId}:${index}`),
+      id: uuidFor(`obratrix:custo:${obraId}:${row.data}`),
       obra_id: obraId,
       eap_item_id: service?.id ?? null,
-      categoria: category,
+      categoria: row.category,
       descricao: [
         "Compra de aço e material básico",
         "Equipe de execução e apoio",
         "Serviço especializado de concretagem",
         "Locação de equipamento de obra",
         "Despesas de canteiro e segurança",
-      ][index % 5],
-      fornecedor: ["Aço Brasil", "Materiais Central", "Concretos Vale", "LocaObra", "Serviços Integrados"][index % 5],
+      ][row.index % 5],
+      fornecedor: ["Aço Brasil", "Materiais Central", "Concretos Vale", "LocaObra", "Serviços Integrados"][row.index % 5],
       documento: `NF-${workIndex + 1}-${String(index + 1).padStart(4, "0")}`,
-      data: dates[index % dates.length],
-      valor: Number(amount.toFixed(2)),
+      data: row.data,
+      valor: expenseValues[index]!,
       criado_por: userIds.get("financeiro@obratrix.demo")!,
       centro_custo_id: service ? null : centerIds.get("ADM") ?? null,
     };
@@ -446,7 +602,17 @@ async function seedRdos(
   const costResult = await supabase.from("obx_custos").upsert(expenseRows);
   requireSuccess(costResult.error);
 
-  return { budget, productionCount: productionRows.length };
+  const activeServiceCounts = confirmedDates.map((date) => activeOn(date).length);
+  return {
+    rdoCount: dates.length,
+    productionCount: productionRows.length,
+    costCount: expenseRows.length,
+    valorAgregado,
+    overrunRatio: overrunCandidate?.ratio ?? 0,
+    activeServiceMin: Math.min(...activeServiceCounts),
+    activeServiceMax: Math.max(...activeServiceCounts),
+    activeServiceAvg: activeServiceCounts.reduce((sum, count) => sum + count, 0) / activeServiceCounts.length,
+  };
 }
 
 async function main() {
@@ -524,6 +690,7 @@ async function main() {
   ];
   const workIds: string[] = [];
   const eapByWork: { id: string; codigo: string; descricao: string; quantidade: number; custo_unitario: number; centro_custo_id: string | null }[][] = [];
+  const stagesByWork: StageSpec[][] = [];
 
   for (const work of workSpecs) {
     const { data, error } = await supabase
@@ -547,7 +714,9 @@ async function main() {
     requireSuccess(error);
     const workId = data!.id as string;
     workIds.push(workId);
-    eapByWork.push(await upsertEap(workId, work.stages, centerIds));
+    const scaledStages = scaleStages(work.stages, work.valor_contrato * 0.85);
+    stagesByWork.push(scaledStages);
+    eapByWork.push(await upsertEap(workId, scaledStages, centerIds));
   }
 
   const workMembers = [
@@ -562,16 +731,29 @@ async function main() {
     .upsert(workMembers, { onConflict: "obra_id,usuario_id" });
   requireSuccess(workMemberResult.error);
 
-  let rdoCount = 0;
+  const countsByWork = [];
   for (let index = 0; index < workIds.length; index += 1) {
-    const result = await seedRdos(workIds[index]!, eapByWork[index]!, users, centerIds, index, fusoHorario);
-    rdoCount += result.productionCount;
+    const spec = workSpecs[index]!;
+    const result = await seedRdos(
+      workIds[index]!,
+      eapByWork[index]!,
+      stagesByWork[index]!,
+      spec.data_inicio,
+      spec.data_fim_prevista,
+      users,
+      centerIds,
+      index,
+      fusoHorario,
+    );
+    countsByWork.push(result);
   }
 
   console.log(
     `Seed concluído: ${people.length} usuários, ${workIds.length} obras, `
     + `${eapByWork.reduce((sum, entries) => sum + entries.length, 0)} serviços EAP e `
-    + `${rdoCount} registros diários de produção.`,
+    + `${countsByWork.reduce((sum, result) => sum + result.rdoCount, 0)} RDOs, `
+    + `${countsByWork.reduce((sum, result) => sum + result.productionCount, 0)} produções e `
+    + `${countsByWork.reduce((sum, result) => sum + result.costCount, 0)} custos.`,
   );
 
   const { data: seededRdos, error: rdosError } = await supabase
@@ -584,13 +766,16 @@ async function main() {
     supabase.from("obx_centros_custo").select("id,nome").eq("empresa_id", companyId),
   ]);
   const seededProduction: { rdo_id: string; eap_item_id: string; quantidade: number }[] = [];
-  for (let start = 0; ; start += 1000) {
-    const { data, error } = await supabase.from("obx_rdo_producao")
-      .select("id,rdo_id,eap_item_id,quantidade").in("rdo_id", seededRdoIds)
-      .order("id").range(start, start + 999);
-    requireSuccess(error);
-    seededProduction.push(...(data ?? []));
-    if (!data || data.length < 1000) break;
+  for (let offset = 0; offset < seededRdoIds.length; offset += 50) {
+    const rdoChunk = seededRdoIds.slice(offset, offset + 50);
+    for (let start = 0; ; start += 1000) {
+      const { data, error } = await supabase.from("obx_rdo_producao")
+        .select("id,rdo_id,eap_item_id,quantidade").in("rdo_id", rdoChunk)
+        .order("id").range(start, start + 999);
+      requireSuccess(error);
+      seededProduction.push(...(data ?? []));
+      if (!data || data.length < 1000) break;
+    }
   }
   requireSuccess(costsError);
   requireSuccess(servicesError);
@@ -628,9 +813,16 @@ async function main() {
         .map(({ id, codigo, quantidadeExecutada, quantidadeOrcada }) => ({ id, codigo, quantidadeExecutada, quantidadeOrcada })),
       semanasEV: weeklyEV,
     }, dataHoje(fusoHorario));
+    const workCosts = (seededCosts ?? []).filter((item) => item.obra_id === obraId);
+    const seedCounts = countsByWork[index]!;
     console.log(
-      `${spec.codigo}: IDC ${metrics.idc?.toFixed(2) ?? "—"} · IDP ${metrics.idp?.toFixed(2) ?? "—"} · `
-      + `EAC ${metrics.custoFinalPrevisto.toFixed(2)} · Alertas: ${alerts.map((item) => item.titulo).join("; ") || "nenhum"}`,
+      `${spec.codigo}: BAC ${formatCurrency(metrics.orcado)} / contrato ${formatCurrency(spec.valor_contrato)} · `
+      + `IDC ${formatNumber(metrics.idc, "pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · `
+      + `IDP ${formatNumber(metrics.idp, "pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · `
+      + `EAC ${formatCurrency(metrics.custoFinalPrevisto)} · RDOs ${obraRdos.length} (${seedCounts.rdoCount}) · `
+      + `produção ${productions.length} · custos ${workCosts.length} · serviços ativos/dia ${seedCounts.activeServiceMin}-${seedCounts.activeServiceMax} (média ${formatNumber(seedCounts.activeServiceAvg, "pt-BR", { maximumFractionDigits: 1 })}) · `
+      + `overrun potencial ${formatNumber(seedCounts.overrunRatio, "pt-BR", { maximumFractionDigits: 2 })} · `
+      + `Alertas: ${alerts.map((item) => `${item.titulo}: ${item.detalhe}`).join("; ") || "nenhum"}`,
     );
   }
 }

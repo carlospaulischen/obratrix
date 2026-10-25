@@ -21,7 +21,7 @@ export default async function DashboardPage() {
     .select("id,codigo,nome,cliente,data_inicio,data_fim_prevista,valor_contrato,status,cidade,uf")
     .eq("empresa_id", company.id)
     .order("updated_at", { ascending: false });
-  const portfolio = await carregarIndicadoresObras(supabase, works ?? [], today, company.id);
+  const portfolio = await carregarIndicadoresObras(supabase, works ?? [], today, company.id, { locale: company.locale, moeda: company.moeda });
   const contractTotal = (works ?? []).reduce((total, work) => total + Number(work.valor_contrato ?? 0), 0);
   const costTotal = portfolio.reduce((total, entry) => total + entry.indicadores.custoReal, 0);
   const rdosToday = (works ?? []).length
@@ -93,7 +93,7 @@ export default async function DashboardPage() {
             <Link key={work.id} href={`/app/obras/${work.id}`} className={`grid gap-3 px-5 py-5 transition hover:bg-slate-50/60 sm:px-7 xl:items-center ${canViewFinancials ? "xl:grid-cols-[1.5fr_1fr_0.6fr_0.6fr_1.2fr_auto]" : "xl:grid-cols-[1.5fr_1fr_auto]"}`}>
               <div className="min-w-0"><p className="truncate font-semibold text-slate-900">{work.codigo} · {work.nome}</p><p className="mt-1 truncate text-xs text-slate-500">{statusText[work.status] ?? work.status} · Entrega {formatDate(work.data_fim_prevista, company.locale)}</p></div>
               <div><p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Avanço físico × planejado</p><p className="mt-1 text-xs font-semibold text-slate-800">{formatNumber(indicadores.valorAgregado / (indicadores.orcado || 1) * 100, company.locale, { maximumFractionDigits: 1 })}% × {formatNumber(indicadores.planejadoPct * 100, company.locale, { maximumFractionDigits: 1 })}%</p></div>
-              {canViewFinancials ? <><p className="text-xs text-slate-700">IDC <strong>{indicadores.idc?.toFixed(2) ?? "—"}</strong></p><p className="text-xs text-slate-700">IDP <strong>{indicadores.idp?.toFixed(2) ?? "—"}</strong></p><div><p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">EAC × BAC</p><p className="mt-1 text-xs font-semibold">{formatCurrency(indicadores.custoFinalPrevisto, company.locale, company.moeda)} × {formatCurrency(indicadores.orcado, company.locale, company.moeda)}</p></div></> : null}
+              {canViewFinancials ? <><p className="text-xs text-slate-700">IDC <strong>{formatNumber(indicadores.idc, company.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></p><p className="text-xs text-slate-700">IDP <strong>{formatNumber(indicadores.idp, company.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></p><div><p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">EAC × BAC</p><p className="mt-1 text-xs font-semibold">{formatCurrency(indicadores.custoFinalPrevisto, company.locale, company.moeda)} × {formatCurrency(indicadores.orcado, company.locale, company.moeda)}</p></div></> : null}
               <span className="flex items-center gap-2 text-xs text-slate-600"><TriangleAlert size={15} className="text-amber-700" />{workAlerts.filter((item) => item.severidade === "critico").length} crítico(s) · {workAlerts.filter((item) => item.severidade === "atencao").length} atenção</span>
             </Link>
           ))}

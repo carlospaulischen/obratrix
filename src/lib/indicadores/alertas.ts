@@ -1,4 +1,5 @@
 import type { Indicadores } from "./calcular";
+import { formatCurrency, formatNumber } from "../format";
 
 export type RegraAlerta = {
   idcAtencao: number;
@@ -37,19 +38,27 @@ export type DadosAlertas = Indicadores & {
   semanasEV?: readonly { semana: string; valor: number }[];
 };
 
-export function avaliarAlertas(dados: DadosAlertas, hoje: string, regras: RegraAlerta = REGRAS_PADRAO): Alerta[] {
+export function avaliarAlertas(
+  dados: DadosAlertas,
+  hoje: string,
+  regras: RegraAlerta = REGRAS_PADRAO,
+  formato: { locale: string; moeda: string } = { locale: "pt-BR", moeda: "BRL" },
+): Alerta[] {
   const alerts: Alerta[] = [];
   const add = (id: string, severidade: Alerta["severidade"], titulo: string, detalhe: string, section = "") =>
     alerts.push({ id, severidade, titulo, detalhe, link: `/app/obras/${dados.obraId}${section ? `/${section}` : ""}` });
-  if (dados.idc !== null && dados.idc < regras.idcAtencao) add("idc", dados.idc < regras.idcCritico ? "critico" : "atencao", "Custo acima do valor executado", `IDC ${dados.idc.toFixed(2)}.`);
-  if (dados.idp !== null && dados.idp < regras.idpAtencao) add("idp", dados.idp < regras.idpCritico ? "critico" : "atencao", "Avanço físico abaixo do planejado", `IDP ${dados.idp.toFixed(2)}.`);
+  if (dados.idc !== null && dados.idc < regras.idcAtencao) add("idc", dados.idc < regras.idcCritico ? "critico" : "atencao", "Custo acima do valor executado", `IDC ${formatNumber(dados.idc, formato.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`);
+  if (dados.idp !== null && dados.idp < regras.idpAtencao) add("idp", dados.idp < regras.idpCritico ? "critico" : "atencao", "Avanço físico abaixo do planejado", `IDP ${formatNumber(dados.idp, formato.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`);
   const eacRatio = dados.orcado > 0 ? dados.custoFinalPrevisto / dados.orcado : 0;
-  if (eacRatio > regras.eacAtencao) add("eac", eacRatio > regras.eacCritico ? "critico" : "atencao", "Custo final previsto acima do orçamento", `EAC ${eacRatio.toFixed(2)}× o BAC.`);
+  if (eacRatio > regras.eacAtencao) {
+    const acima = formatNumber((eacRatio - 1) * 100, formato.locale, { maximumFractionDigits: 0 });
+    add("eac", eacRatio > regras.eacCritico ? "critico" : "atencao", "Custo final previsto acima do orçamento", `Custo final previsto ${acima}% acima do orçamento.`);
+  }
   for (const service of dados.porServico.filter((item) => item.custoReal > item.orcado).sort((a, b) => (b.custoReal - b.orcado) - (a.custoReal - a.orcado)).slice(0, regras.alertasServico)) {
-    add(`custo-servico-${service.id}`, "critico", "Custo real acima do orçamento do serviço", `${service.codigo} · desvio de ${service.custoReal - service.orcado}.`, "orcamento");
+    add(`custo-servico-${service.id}`, "critico", "Custo real acima do orçamento do serviço", `${service.codigo} · desvio de ${formatCurrency(service.custoReal - service.orcado, formato.locale, formato.moeda)}.`, "orcamento");
   }
   for (const service of dados.producaoAcima ?? []) {
-    add(`producao-${service.id}`, "atencao", "Produção acima da quantidade orçada", `${service.codigo} · ${service.quantidadeExecutada} de ${service.quantidadeOrcada}.`, "orcamento");
+    add(`producao-${service.id}`, "atencao", "Produção acima da quantidade orçada", `${service.codigo} · ${formatNumber(service.quantidadeExecutada, formato.locale)} de ${formatNumber(service.quantidadeOrcada, formato.locale)}.`, "orcamento");
   }
   if (dados.status === "em_andamento") {
     const dates: string[] = [];

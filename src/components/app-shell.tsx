@@ -64,10 +64,12 @@ export function AppShell({
             <ClipboardList size={18} />
             RDO
           </Link>
-          <Link href="/app/obras?secao=custos" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-emerald-800">
-            <Wallet size={18} />
-            Custos
-          </Link>
+          {perfil !== "encarregado" && (
+            <Link href="/app/obras?secao=custos" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-emerald-800">
+              <Wallet size={18} />
+              Custos
+            </Link>
+          )}
           <Link href="/app/membros" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-emerald-800">
             <UsersRound size={18} />
             Membros
